@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Homestead CLI — talk to Milo from the terminal.
+
+Usage:
+    homestead                       # Interactive mode
+    homestead "do something"        # One-shot prompt
+    homestead --max-turns 10 "..."  # Override max turns
+"""
+
+__version__ = '0.1.0'
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+LORE_DIR = REPO_ROOT / "lore"
+MCP_CONFIG = REPO_ROOT / "manor" / "mcp-config.json"
+HOMESTEAD_DIR = Path(os.environ.get("HOMESTEAD_DATA_DIR", "~/.homestead")).expanduser()
+SKILLS_DIR = HOMESTEAD_DIR / "skills"
+SCRATCHPAD_DIR = HOMESTEAD_DIR / "scratchpad"
+
+
+# ---------------------------------------------------------------------------
+# System prompt assembly (mirrors manor/api/prompt.py)
+# ---------------------------------------------------------------------------
+
+_MCP_SECTION = """\
+# Available Tools (MCP)
+
+You have access to homestead tools via MCP. These let you:
+- Manage tasks (create, update, list, change status)
+- Manage scheduled jobs (create, toggle, trigger)
+- Read and write lore files (your identity and context)
+- Read and write scratchpad notes (persistent memory)
+- Propose code changes for human review (propose_code_change)
+- Send messages via the outbox (send_message)
+- Check system health and usage stats
+
+Use these tools proactively. When you want to change code, always use \
+propose_code_change so the human can review before applying."""
+
+
+def _read(path: Path) -> str | None:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+        return text if text else None
+    except OSError:
+        return None
+
+
+def _skills_section() -> str | None:
+    if not SKILLS_DIR.is_dir():
+        return None
+    entries = []
+    for md in sorted(SKILLS_DIR.glob("*.md")):
+        content = _read(md)
+        if not content:
+            continue
+        name, desc = md.stem, ""
+        if content.startswith("---"):
+            try:
+                end = content.index("---", 3)
+                for line in content[3:end].splitlines():
+                    if ":" not in line:
+                        continue
+                    k, _, v = line.partition(":")
+                    k, v = k.strip().lower(), v.strip().strip("\"'")
+                    if k == "name":
+                        name = v
+                    elif k == "description":
+                        desc = v
+            except ValueError:
+                pass
+        entries.append(f"- **{name}**: {desc}" if desc else f"- **{name}**")
+    return ("# Skills\n\n" + "\n".join(entries)) if entries else None
+
+
+def _scratchpad_hint() -> str | None:
+    if not SCRATCHPAD_DIR.is_dir():
+        return None
+    files = sorted(p.name for p in SCRATCHPAD_DIR.iterdir() if p.is_file())
+    if not files:
+        return None
+    listing = ", ".join(f"`{f}`" for f in files)
+    return (
+        "# Scratchpad\n\n"
+        f"You have persistent scratchpad notes: {listing}.\n"
+        "Read or update them via the scratchpad MCP tools."
+    )
+
+
+def assemble_system_prompt() -> str:
+    parts: list[str] = []
+
+    soul = _read(LORE_DIR / "soul.md")
+    if soul:
+        parts.append(soul)
+
+    behavior = _read(LORE_DIR / "claude.md")
+    if behavior:
+        parts.append(behavior)
+
+    user = _read(LORE_DIR / "user.md")
+    if user:
+        parts.append(user)
+
+    skills = _skills_section()
+    if skills:
+        parts.append(skills)
+
+    scratchpad = _scratchpad_hint()
+    if scratchpad:
+        parts.append(scratchpad)
+
+    if MCP_CONFIG.is_file():
+        parts.append(_MCP_SECTION)
+
+    # Extra lore
+    core = {"soul.md", "claude.md", "user.md"}
+    if LORE_DIR.is_dir():
+        for md in sorted(LORE_DIR.glob("*.md")):
+            if md.name not in core:
+                content = _read(md)
+                if content:
+                    parts.append(content)
+
+    return "\n\n---\n\n".join(parts) if parts else ""
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="homestead",
+        description="Talk to Milo via the terminal.",
+    )
+    parser.add_argument("prompt", nargs="?", help="One-shot prompt (omit for interactive)")
+    parser.add_argument("--max-turns", type=int, default=10, help="Max agentic turns (default: 10)")
+    parser.add_argument("--model", default=None, help="Model override")
+    parser.add_argument("--no-mcp", action="store_true", help="Disable MCP tools")
+    parser.add_argument("--verbose", action="store_true", help="Pass --verbose to claude")
+    args = parser.parse_args()
+
+    claude = os.environ.get("CLAUDE_CLI_PATH", "claude")
+
+    # Build command
+    cmd: list[str] = [claude]
+
+    if args.prompt:
+        cmd.extend(["-p", args.prompt])
+
+    cmd.extend(["--max-turns", str(args.max_turns)])
+    cmd.append("--dangerously-skip-permissions")
+
+    if args.verbose:
+        cmd.append("--verbose")
+
+    system_prompt = assemble_system_prompt()
+    if system_prompt:
+        cmd.extend(["--system-prompt", system_prompt])
+
+    if not args.no_mcp and MCP_CONFIG.is_file():
+        cmd.extend(["--mcp-config", str(MCP_CONFIG)])
+
+    if args.model:
+        cmd.extend(["--model", args.model])
+
+    # Clean env (same as herald — strip Claude Code SDK vars)
+    clean_env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("CLAUDECODE") and not k.startswith("CLAUDE_CODE")
+        and k != "CLAUDE_AGENT_SDK_VERSION"
+    }
+
+    try:
+        result = subprocess.run(cmd, env=clean_env)
+        return result.returncode
+    except KeyboardInterrupt:
+        return 130
+    except FileNotFoundError:
+        print(f"Error: '{claude}' not found. Is Claude CLI installed?", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
