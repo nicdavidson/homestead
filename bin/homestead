@@ -104,6 +104,10 @@ def assemble_system_prompt() -> str:
     if soul:
         parts.append(soul)
 
+    identity = _read(LORE_DIR / "identity.md")
+    if identity:
+        parts.append(identity)
+
     behavior = _read(LORE_DIR / "claude.md")
     if behavior:
         parts.append(behavior)
@@ -111,6 +115,10 @@ def assemble_system_prompt() -> str:
     user = _read(LORE_DIR / "user.md")
     if user:
         parts.append(user)
+
+    agents = _read(LORE_DIR / "agents.md")
+    if agents:
+        parts.append(agents)
 
     skills = _skills_section()
     if skills:
@@ -124,7 +132,7 @@ def assemble_system_prompt() -> str:
         parts.append(_MCP_SECTION)
 
     # Extra lore
-    core = {"soul.md", "claude.md", "user.md"}
+    core = {"soul.md", "identity.md", "claude.md", "user.md", "agents.md"}
     if LORE_DIR.is_dir():
         for md in sorted(LORE_DIR.glob("*.md")):
             if md.name not in core:

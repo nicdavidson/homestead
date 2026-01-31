@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS proposals (
 _MIGRATE_COLUMNS = [
     "ALTER TABLE proposals ADD COLUMN original_content TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE proposals ADD COLUMN new_content TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE proposals ADD COLUMN pr_url TEXT NOT NULL DEFAULT ''",
 ]
 
 _CREATE_INDEXES = [
@@ -105,6 +106,10 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     except (IndexError, KeyError):
         d["original_content"] = ""
         d["new_content"] = ""
+    try:
+        d["pr_url"] = row["pr_url"]
+    except (IndexError, KeyError):
+        d["pr_url"] = ""
     return d
 
 
@@ -327,9 +332,21 @@ def update_proposal_status(proposal_id: str, body: UpdateStatusBody):
         conn.close()
 
 
+def _git(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """Run a git command in REPO_ROOT."""
+    defaults = {"capture_output": True, "text": True, "cwd": REPO_ROOT, "timeout": 30}
+    defaults.update(kwargs)
+    return subprocess.run(["git"] + args, **defaults)
+
+
+def _current_branch() -> str:
+    result = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    return result.stdout.strip() if result.returncode == 0 else "master"
+
+
 @router.post("/{proposal_id}/apply")
 def apply_proposal(proposal_id: str):
-    """Apply an approved proposal by writing the new content and committing."""
+    """Apply an approved proposal, optionally on a dedicated branch with a PR."""
     conn = _get_conn()
     try:
         row = _fetch_proposal(conn, proposal_id)
@@ -350,6 +367,8 @@ def apply_proposal(proposal_id: str):
         except (IndexError, KeyError):
             pass
 
+        proposal_branch = settings.proposal_branch  # e.g. "milo", or "" for current branch
+
         # Save originals for rollback
         saved_originals: dict[str, str | None] = {}
         for fp in file_paths:
@@ -359,37 +378,43 @@ def apply_proposal(proposal_id: str):
             else:
                 saved_originals[fp] = None
 
+        original_branch = _current_branch()
+        switched_branch = False
+        pr_url = ""
+
         try:
+            # Switch to proposal branch if configured
+            if proposal_branch:
+                _git(["fetch", "origin", proposal_branch], timeout=30)
+
+                check = _git(["rev-parse", "--verify", proposal_branch])
+                if check.returncode != 0:
+                    remote_check = _git(["rev-parse", "--verify", f"origin/{proposal_branch}"])
+                    if remote_check.returncode == 0:
+                        _git(["checkout", "-b", proposal_branch, f"origin/{proposal_branch}"], check=True)
+                    else:
+                        _git(["checkout", "-b", proposal_branch], check=True)
+                else:
+                    _git(["checkout", proposal_branch], check=True)
+                    _git(["pull", "--ff-only", "origin", proposal_branch], timeout=30)
+
+                switched_branch = True
+
             if new_content and len(file_paths) == 1:
-                # Direct file write — reliable, no diff context issues
+                # Direct file write
                 file_abs = Path(REPO_ROOT) / file_paths[0]
                 file_abs.parent.mkdir(parents=True, exist_ok=True)
                 file_abs.write_text(new_content, encoding="utf-8")
             else:
-                # Fallback to git apply for legacy proposals without stored content
+                # Fallback to git apply for legacy proposals
                 diff_text = row["diff"]
-                apply_result = subprocess.run(
-                    ["git", "apply", "--check", "-"],
-                    input=diff_text,
-                    capture_output=True,
-                    text=True,
-                    cwd=REPO_ROOT,
-                    timeout=30,
-                )
+                apply_result = _git(["apply", "--check", "-"], input=diff_text)
                 if apply_result.returncode != 0:
                     error_msg = apply_result.stderr.strip() or apply_result.stdout.strip()
                     raise subprocess.CalledProcessError(
                         apply_result.returncode, "git apply --check", error_msg
                     )
-                subprocess.run(
-                    ["git", "apply", "-"],
-                    input=diff_text,
-                    capture_output=True,
-                    text=True,
-                    cwd=REPO_ROOT,
-                    timeout=30,
-                    check=True,
-                )
+                _git(["apply", "-"], input=diff_text, check=True)
 
             # Run test command (if configured) before committing
             test_cmd = settings.proposal_test_cmd
@@ -403,7 +428,6 @@ def apply_proposal(proposal_id: str):
                     timeout=120,
                 )
                 if test_result.returncode != 0:
-                    # Tests failed — rollback files
                     _rollback_files(saved_originals)
                     test_output = (
                         test_result.stderr.strip()
@@ -418,23 +442,53 @@ def apply_proposal(proposal_id: str):
 
             # Stage and commit
             for fp in file_paths:
-                subprocess.run(
-                    ["git", "add", fp],
+                _git(["add", fp], timeout=10)
+
+            commit_msg = f"proposal: {title}"
+            _git(["commit", "-m", commit_msg], check=True)
+
+            # Push and create PR if using a dedicated branch
+            if proposal_branch:
+                push_result = _git(["push", "origin", proposal_branch], timeout=60)
+                if push_result.returncode != 0:
+                    raise subprocess.CalledProcessError(
+                        push_result.returncode, "git push",
+                        push_result.stderr.strip() or push_result.stdout.strip(),
+                    )
+
+                # Create PR via gh CLI
+                pr_body = row["description"] or f"Automated proposal: {title}"
+                pr_result = subprocess.run(
+                    [
+                        "gh", "pr", "create",
+                        "--base", "master",
+                        "--head", proposal_branch,
+                        "--title", title,
+                        "--body", pr_body,
+                    ],
                     capture_output=True,
                     text=True,
                     cwd=REPO_ROOT,
-                    timeout=10,
+                    timeout=30,
                 )
-
-            commit_msg = f"Applied proposal: {title}"
-            subprocess.run(
-                ["git", "commit", "-m", commit_msg],
-                capture_output=True,
-                text=True,
-                cwd=REPO_ROOT,
-                timeout=30,
-                check=True,
-            )
+                if pr_result.returncode == 0:
+                    pr_url = pr_result.stdout.strip()
+                else:
+                    # PR creation failed — might already exist. Try to find existing.
+                    list_result = subprocess.run(
+                        ["gh", "pr", "list", "--head", proposal_branch, "--json", "url", "--limit", "1"],
+                        capture_output=True,
+                        text=True,
+                        cwd=REPO_ROOT,
+                        timeout=15,
+                    )
+                    if list_result.returncode == 0:
+                        try:
+                            prs = json.loads(list_result.stdout)
+                            if prs:
+                                pr_url = prs[0]["url"]
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            pass
 
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
             # Rollback on any failure
@@ -456,14 +510,22 @@ def apply_proposal(proposal_id: str):
             )
             conn.commit()
 
+            # Switch back to original branch
+            if switched_branch:
+                _git(["checkout", original_branch])
+
             row = _fetch_proposal(conn, proposal_id)
             return _row_to_dict(row)
+
+        # Switch back to original branch
+        if switched_branch:
+            _git(["checkout", original_branch])
 
         # Success — mark as applied
         now = time.time()
         conn.execute(
-            "UPDATE proposals SET status = ?, applied_at = ? WHERE id = ?",
-            ("applied", now, proposal_id),
+            "UPDATE proposals SET status = ?, applied_at = ?, pr_url = ? WHERE id = ?",
+            ("applied", now, pr_url, proposal_id),
         )
         conn.commit()
 

@@ -10,7 +10,7 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 # Lore files loaded explicitly (in order) before the catch-all pass.
-_CORE_LORE_FILES = {"soul.md", "claude.md", "user.md"}
+_CORE_LORE_FILES = {"soul.md", "identity.md", "claude.md", "user.md", "agents.md"}
 
 _MCP_SECTION = """\
 # Available Tools (MCP)
@@ -138,15 +138,25 @@ def assemble_system_prompt() -> str:
     if soul:
         parts.append(soul)
 
-    # 2. Behavior (Claude-specific directives)
+    # 2. Identity
+    identity = _read_file(lore_path / "identity.md")
+    if identity:
+        parts.append(identity)
+
+    # 3. Behavior (Claude-specific directives)
     behavior = _read_file(lore_path / "claude.md")
     if behavior:
         parts.append(behavior)
 
-    # 3. User context
+    # 4. User context
     user_ctx = _read_file(lore_path / "user.md")
     if user_ctx:
         parts.append(user_ctx)
+
+    # 5. Agents
+    agents = _read_file(lore_path / "agents.md")
+    if agents:
+        parts.append(agents)
 
     # 4. Skills listing
     skills = _build_skills_section()
