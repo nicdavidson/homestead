@@ -17,6 +17,7 @@ EDITABLE_FIELDS: dict[str, type] = {
     "claude_timeout_s": float,
     "allowed_origins": list,
     "proposal_test_cmd": str,
+    "proposal_branch": str,
 }
 
 
@@ -36,6 +37,7 @@ class Settings:
     ])
     subagent_model: str = "sonnet"  # default model for MCP sub-agents
     proposal_test_cmd: str = ""  # shell command to run before committing proposals
+    proposal_branch: str = ""  # branch to commit proposals on (empty = commit on current branch)
 
     # -- derived paths ---------------------------------------------------------
 
@@ -190,6 +192,7 @@ def load_settings() -> Settings:
         allowed_models=allowed_models,
         subagent_model=os.environ.get("SUBAGENT_MODEL", "sonnet"),
         proposal_test_cmd=os.environ.get("PROPOSAL_TEST_CMD", ""),
+        proposal_branch=os.environ.get("PROPOSAL_BRANCH", ""),
     )
 
     # Apply any saved overrides from the UI

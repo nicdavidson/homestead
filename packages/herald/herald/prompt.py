@@ -20,12 +20,17 @@ def assemble_system_prompt(config: Config) -> str:
     if soul:
         parts.append(soul)
 
-    # 2. Behavior directives (claude.md)
+    # 2. Identity
+    identity = _read_lore(config, "identity.md")
+    if identity:
+        parts.append(identity)
+
+    # 3. Behavior directives (claude.md)
     behavior = _read_lore(config, "claude.md")
     if behavior:
         parts.append(behavior)
 
-    # 3. User context
+    # 4. User context
     user = _read_lore(config, "user.md")
     if user:
         parts.append(user)
@@ -37,7 +42,12 @@ def assemble_system_prompt(config: Config) -> str:
             "it for them using the `write_lore` MCP tool."
         )
 
-    # 4. Available skills (lazy-loaded, just names + descriptions)
+    # 5. Agents
+    agents = _read_lore(config, "agents.md")
+    if agents:
+        parts.append(agents)
+
+    # 6. Available skills (lazy-loaded, just names + descriptions)
     skills_section = _build_skills_section(config)
     if skills_section:
         parts.append(skills_section)
@@ -61,7 +71,7 @@ def assemble_system_prompt(config: Config) -> str:
             )
 
     # 6. Any extra lore files (*.md in lore/ not already loaded)
-    _loaded = {"soul.md", "claude.md", "user.md"}
+    _loaded = {"soul.md", "identity.md", "claude.md", "user.md", "agents.md"}
     if config.lore_dir:
         lore_path = Path(config.lore_dir)
         for f in sorted(lore_path.glob("*.md")):
