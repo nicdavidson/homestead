@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import os
 import re
 import sys
 import time
@@ -29,6 +30,37 @@ from herald.claude import (
 )
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Usage reporting
+# ---------------------------------------------------------------------------
+
+_MANOR_API_URL = os.environ.get("MANOR_API_URL", "http://localhost:8700")
+
+
+async def _report_usage(result: ClaudeResult, session_name: str, chat_id: int, started_at: float) -> None:
+    """POST usage data to Manor API in the background (best-effort)."""
+    if result.input_tokens == 0 and result.output_tokens == 0:
+        return  # nothing to report
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(f"{_MANOR_API_URL}/api/usage", json={
+                "session_id": result.session_id,
+                "chat_id": chat_id,
+                "session_name": session_name,
+                "model": result.model,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "cache_creation_tokens": result.cache_creation_tokens,
+                "cache_read_tokens": result.cache_read_tokens,
+                "cost_usd": result.cost_usd,
+                "num_turns": result.num_turns,
+                "source": "herald",
+                "started_at": started_at,
+            })
+    except Exception:
+        log.debug("Failed to report usage to Manor API", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -194,9 +226,7 @@ async def process_queue(
             now = time.time()
             if now - last_edit_time >= config.streaming_interval_s and accumulated.strip():
                 if sent_message_id is None:
-                    if typing_task is not None:
-                        typing_task.cancel()
-                        typing_task = None
+                    # Keep typing indicator active during streaming
                     try:
                         sent = await bot.send_message(
                             chat_id,
@@ -220,6 +250,7 @@ async def process_queue(
 
         try:
             typing_task = asyncio.create_task(_keep_typing())
+            spawn_started_at = time.time()
 
             log.info(
                 "chat=%s user=%s spawning %s (session=%s/%s resume=%s)",
@@ -236,6 +267,9 @@ async def process_queue(
                 typing_task = None
 
             log.info("chat=%s claude responded (%d chars)", chat_id, len(result.text))
+
+            # Report usage to Manor API (fire-and-forget)
+            asyncio.create_task(_report_usage(result, session.name, chat_id, spawn_started_at))
 
             if result.session_id and result.session_id != session.claude_session_id:
                 sessions.update_session_id(session, result.session_id)
@@ -280,10 +314,12 @@ async def process_queue(
             # Auto-retry with fresh session
             try:
                 typing_task = asyncio.create_task(_keep_typing())
+                retry_started_at = time.time()
                 result = await dispatch_message(msg.text, session, config, on_delta)
                 if typing_task is not None:
                     typing_task.cancel()
                     typing_task = None
+                asyncio.create_task(_report_usage(result, session.name, chat_id, retry_started_at))
                 if result.session_id and result.session_id != session.claude_session_id:
                     sessions.update_session_id(session, result.session_id)
                 final_html = md_to_telegram_html(result.text if result.text else accumulated)
