@@ -37,6 +37,13 @@ class SessionNotFoundError(Exception):
 class ClaudeResult:
     text: str
     session_id: str
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    cost_usd: float | None = None
+    num_turns: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +106,7 @@ async def spawn_claude(
     on_delta: Callable[[str], Awaitable[None]] | None = None,
     model_name: str | None = None,
     system_prompt: str | None = None,
+    session_name: str = "default",
 ) -> ClaudeResult:
     """Spawn the ``claude`` CLI with ``--output-format stream-json`` and parse
     the streaming output, calling *on_delta* for every incremental text chunk.
@@ -129,7 +137,8 @@ async def spawn_claude(
         effective_prompt = system_prompt or config.system_prompt
         cmd.extend(["--system-prompt", effective_prompt])
 
-    log.info("spawning claude: %s", " ".join(cmd))
+    log.info("[session:%s] spawning claude (session_id=%s...): %s", 
+             session_name, session_id[:8], " ".join(cmd))
 
     # -- clean environment: strip Claude Code SDK vars that cause exit code 1 --
     clean_env = {
@@ -139,11 +148,15 @@ async def spawn_claude(
     }
 
     # -- spawn -----------------------------------------------------------------
+    # Increase stream reader limit: Claude CLI's stream-json emits a "system"
+    # event that echoes the full system prompt as a single JSON line, which can
+    # exceed the default 64 KB asyncio buffer limit.
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=clean_env,
+        limit=1024 * 1024,  # 1 MB
     )
 
     # -- parse stream-json -----------------------------------------------------
@@ -152,10 +165,21 @@ async def spawn_claude(
     result_text: str | None = None
     result_session_id: str = session_id
 
+    # Usage accumulators
+    usage_model: str = model_name or ""
+    usage_input_tokens: int = 0
+    usage_output_tokens: int = 0
+    usage_cache_creation: int = 0
+    usage_cache_read: int = 0
+    result_cost_usd: float | None = None
+    result_num_turns: int = 0
+
     raw_lines_seen: list[str] = []
 
     async def _read_stdout() -> None:
         nonlocal saw_deltas, result_text, result_session_id
+        nonlocal usage_model, usage_input_tokens, usage_output_tokens
+        nonlocal usage_cache_creation, usage_cache_read, result_cost_usd, result_num_turns
         assert proc.stdout is not None
 
         async for raw_line in proc.stdout:
@@ -192,6 +216,15 @@ async def spawn_claude(
                 # Only forward via on_delta when we haven't already seen
                 # incremental deltas (avoids duplicating output).
                 message = event.get("message", {})
+                # Extract usage data
+                usage = message.get("usage", {})
+                if usage:
+                    usage_input_tokens += usage.get("input_tokens", 0)
+                    usage_output_tokens += usage.get("output_tokens", 0)
+                    usage_cache_creation += usage.get("cache_creation_input_tokens", 0)
+                    usage_cache_read += usage.get("cache_read_input_tokens", 0)
+                if message.get("model"):
+                    usage_model = message["model"]
                 for block in message.get("content", []):
                     if block.get("type") == "text":
                         text = block.get("text", "")
@@ -203,6 +236,8 @@ async def spawn_claude(
             elif etype == "result":
                 result_text = event.get("result", "")
                 result_session_id = event.get("session_id", session_id)
+                result_cost_usd = event.get("cost_usd")
+                result_num_turns = event.get("num_turns", 0)
 
     # -- drive stdout reader with timeout --------------------------------------
     try:
@@ -257,4 +292,14 @@ async def spawn_claude(
     # -- build result ----------------------------------------------------------
     final_text = result_text if result_text is not None else "".join(accumulated)
 
-    return ClaudeResult(text=final_text, session_id=result_session_id)
+    return ClaudeResult(
+        text=final_text,
+        session_id=result_session_id,
+        model=usage_model,
+        input_tokens=usage_input_tokens,
+        output_tokens=usage_output_tokens,
+        cache_creation_tokens=usage_cache_creation,
+        cache_read_tokens=usage_cache_read,
+        cost_usd=result_cost_usd,
+        num_turns=result_num_turns,
+    )

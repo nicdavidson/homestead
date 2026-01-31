@@ -90,10 +90,9 @@ class SessionManager:
     # -- read ------------------------------------------------------------------
 
     def get_active(self, chat_id: int) -> SessionMeta | None:
-        """Get the currently active session for a chat."""
+        """Get the globally active session (chat_id ignored for backward compat)."""
         row = self._conn.execute(
-            "SELECT * FROM sessions WHERE chat_id = ? AND is_active = 1",
-            (chat_id,),
+            "SELECT * FROM sessions WHERE is_active = 1",
         ).fetchone()
         return self._row_to_meta(row) if row else None
 
@@ -102,36 +101,44 @@ class SessionManager:
         return self.get_active(chat_id)
 
     def get_by_name(self, chat_id: int, name: str) -> SessionMeta | None:
+        """Get session by name globally (chat_id ignored for backward compat)."""
         row = self._conn.execute(
-            "SELECT * FROM sessions WHERE chat_id = ? AND name = ?",
-            (chat_id, name),
+            "SELECT * FROM sessions WHERE name = ?",
+            (name,),
         ).fetchone()
         return self._row_to_meta(row) if row else None
 
     def list_sessions(self, chat_id: int) -> list[SessionMeta]:
+        """List all global sessions (chat_id ignored for backward compat)."""
         rows = self._conn.execute(
-            "SELECT * FROM sessions WHERE chat_id = ? ORDER BY last_active_at DESC",
-            (chat_id,),
+            "SELECT * FROM sessions ORDER BY last_active_at DESC",
         ).fetchall()
         return [self._row_to_meta(r) for r in rows]
 
     # -- write -----------------------------------------------------------------
 
-    def create(self, chat_id: int, user_id: int, name: str = "default", model: str = "claude") -> SessionMeta:
+        def create(self, chat_id: int, user_id: int, name: str = "default", model: str = "claude") -> SessionMeta:
+        """Create or replace a global session (chat_id/user_id kept for backward compat)."""
+        import logging
+        log = logging.getLogger(__name__)
+        
         now = time.time()
         session_id = str(uuid.uuid4())
+        log.info(f"[session:{name}] Creating new session with ID {session_id[:8]}...")
+        
         self._conn.execute(
             "INSERT OR REPLACE INTO sessions "
-            "(chat_id, name, user_id, claude_session_id, model, is_active, created_at, last_active_at, message_count) "
-            "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0)",
-            (chat_id, name, user_id, session_id, model, now, now),
+            "(name, claude_session_id, model, is_active, created_at, last_active_at, message_count, user_id, chat_id) "
+            "VALUES (?, ?, ?, 1, ?, ?, 0, ?, ?)",
+            (name, session_id, model, now, now, user_id, chat_id),
         )
-        # Deactivate other sessions for this chat
+        # Deactivate all other sessions globally
         self._conn.execute(
-            "UPDATE sessions SET is_active = 0 WHERE chat_id = ? AND name != ?",
-            (chat_id, name),
+            "UPDATE sessions SET is_active = 0 WHERE name != ?",
+            (name,),
         )
         self._conn.commit()
+        log.info(f"[session:{name}] Session created and activated")
         return SessionMeta(
             chat_id=chat_id,
             user_id=user_id,
@@ -144,28 +151,31 @@ class SessionManager:
         )
 
     def switch(self, chat_id: int, name: str) -> SessionMeta | None:
-        """Switch to an existing named session."""
+        """Switch to an existing named session globally (chat_id ignored)."""
         session = self.get_by_name(chat_id, name)
         if session is None:
             return None
+        # Deactivate all sessions globally
         self._conn.execute(
-            "UPDATE sessions SET is_active = 0 WHERE chat_id = ?", (chat_id,)
+            "UPDATE sessions SET is_active = 0"
         )
+        # Activate the target session
         self._conn.execute(
-            "UPDATE sessions SET is_active = 1 WHERE chat_id = ? AND name = ?",
-            (chat_id, name),
+            "UPDATE sessions SET is_active = 1 WHERE name = ?",
+            (name,),
         )
         self._conn.commit()
         session.is_active = True
         return session
 
     def touch(self, session: SessionMeta) -> None:
+        """Update session activity."""
         session.last_active_at = time.time()
         session.message_count += 1
         self._conn.execute(
             "UPDATE sessions SET last_active_at = ?, message_count = ? "
-            "WHERE chat_id = ? AND name = ?",
-            (session.last_active_at, session.message_count, session.chat_id, session.name),
+            "WHERE name = ?",
+            (session.last_active_at, session.message_count, session.name),
         )
         self._conn.commit()
 
@@ -174,10 +184,10 @@ class SessionManager:
         return self.create(chat_id, user_id, name, model)
 
     def set_model(self, chat_id: int, name: str, model: str) -> None:
-        """Change the model for an existing session."""
+        """Change the model for an existing session (chat_id ignored)."""
         self._conn.execute(
-            "UPDATE sessions SET model = ? WHERE chat_id = ? AND name = ?",
-            (model, chat_id, name),
+            "UPDATE sessions SET model = ? WHERE name = ?",
+            (model, name),
         )
         self._conn.commit()
 
@@ -185,8 +195,8 @@ class SessionManager:
         """Update the Claude CLI session ID (after first response)."""
         session.claude_session_id = new_id
         self._conn.execute(
-            "UPDATE sessions SET claude_session_id = ? WHERE chat_id = ? AND name = ?",
-            (new_id, session.chat_id, session.name),
+            "UPDATE sessions SET claude_session_id = ? WHERE name = ?",
+            (new_id, session.name),
         )
         self._conn.commit()
 
@@ -200,12 +210,11 @@ class SessionManager:
         """Update all fields (backward compat helper)."""
         self._conn.execute(
             "UPDATE sessions SET claude_session_id = ?, last_active_at = ?, message_count = ? "
-            "WHERE chat_id = ? AND name = ?",
+            "WHERE name = ?",
             (
                 session.claude_session_id,
                 session.last_active_at,
                 session.message_count,
-                session.chat_id,
                 session.name,
             ),
         )
