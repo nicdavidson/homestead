@@ -1,6 +1,4 @@
-from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +27,7 @@ class Config:
     lore_dir: str = ""  # resolved at load time
     mcp_config_path: str = ""  # resolved at load time
     outbox_poll_interval_s: float = 2.0
+    agent_name: str = "Milo"
 
 
 def load_config() -> Config:
@@ -83,4 +82,5 @@ def load_config() -> Config:
         lore_dir=lore_dir,
         mcp_config_path=mcp_config,
         outbox_poll_interval_s=float(os.environ.get("OUTBOX_POLL_INTERVAL_S", "2.0")),
+        agent_name=os.environ.get("AGENT_NAME", "Milo"),
     )
