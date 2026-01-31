@@ -6,10 +6,9 @@ Usage:
     homestead "do something"        # One-shot prompt
     homestead --max-turns 10 "..."  # Override max turns
 """
-
-__version__ = '0.1.0'
-
 from __future__ import annotations
+
+__version__ = "0.1.0"
 
 import argparse
 import os
@@ -145,6 +144,7 @@ def main() -> int:
         prog="homestead",
         description="Talk to Milo via the terminal.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("prompt", nargs="?", help="One-shot prompt (omit for interactive)")
     parser.add_argument("--max-turns", type=int, default=10, help="Max agentic turns (default: 10)")
     parser.add_argument("--model", default=None, help="Model override")
