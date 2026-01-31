@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import signal
+import time
 from dataclasses import dataclass
 from typing import Callable, Awaitable
 
@@ -107,6 +108,7 @@ async def spawn_claude(
     model_name: str | None = None,
     system_prompt: str | None = None,
     session_name: str = "default",
+    chat_id: int = 0,
 ) -> ClaudeResult:
     """Spawn the ``claude`` CLI with ``--output-format stream-json`` and parse
     the streaming output, calling *on_delta* for every incremental text chunk.
@@ -146,6 +148,14 @@ async def spawn_claude(
         if not k.startswith("CLAUDECODE") and not k.startswith("CLAUDE_CODE")
             and k != "CLAUDE_AGENT_SDK_VERSION"
     }
+
+    # Pass TG context so mcp-tg can send files/photos to the right chat
+    if chat_id:
+        clean_env["TG_CHAT_ID"] = str(chat_id)
+    if config.telegram_bot_token:
+        clean_env["TG_BOT_TOKEN"] = config.telegram_bot_token
+
+    started_at = time.time()
 
     # -- spawn -----------------------------------------------------------------
     # Increase stream reader limit: Claude CLI's stream-json emits a "system"
@@ -261,8 +271,9 @@ async def spawn_claude(
     if stderr_text:
         log.warning("claude stderr (exit=%s): %s", proc.returncode, stderr_text)
 
-    log.info("claude done: exit=%s stdout_chunks=%d stderr_len=%d resume=%s raw_lines=%d",
-             proc.returncode, len(accumulated), len(stderr_text), resume, len(raw_lines_seen))
+    elapsed = time.time() - started_at
+    log.info("claude done: exit=%s elapsed=%.1fs chunks=%d stderr_len=%d resume=%s lines=%d",
+             proc.returncode, elapsed, len(accumulated), len(stderr_text), resume, len(raw_lines_seen))
 
     # -- check for errors ------------------------------------------------------
     if proc.returncode != 0:
@@ -290,7 +301,9 @@ async def spawn_claude(
         )
 
     # -- build result ----------------------------------------------------------
-    final_text = result_text if result_text is not None else "".join(accumulated)
+    # Prefer result_text when it has content; fall back to accumulated chunks
+    # (result_text can be "" when Claude's last turn was pure tool-use)
+    final_text = result_text if result_text else "".join(accumulated)
 
     return ClaudeResult(
         text=final_text,

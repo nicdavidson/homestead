@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@/lib/api";
-import type { Proposal } from "@/lib/types";
+import type { Proposal, ProposalFile } from "@/lib/types";
 
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-amber-500/15 text-amber-400",
@@ -40,6 +40,63 @@ function DiffView({ diff }: { diff: string }) {
         );
       })}
     </pre>
+  );
+}
+
+function diffStats(diff: string): { added: number; removed: number } {
+  let added = 0, removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) added++;
+    else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+  }
+  return { added, removed };
+}
+
+function FileDiffs({ files, fallbackDiff }: { files: ProposalFile[]; fallbackDiff: string }) {
+  const [expandedFiles, setExpandedFiles] = useState<Set<number>>(new Set([0]));
+
+  if (!files || files.length === 0) {
+    return <DiffView diff={fallbackDiff} />;
+  }
+
+  const toggleFile = (idx: number) => {
+    setExpandedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
+  return (
+    <div className="space-y-2">
+      {files.map((f, idx) => {
+        const stats = diffStats(f.diff);
+        const isOpen = expandedFiles.has(idx);
+        return (
+          <div key={idx} className="border border-neutral-800 rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggleFile(idx)}
+              className="w-full flex items-center justify-between px-3 py-2 bg-neutral-900/50 hover:bg-neutral-800/50 transition-colors text-left"
+            >
+              <span className="text-xs font-mono text-neutral-300 truncate">
+                {f.file_path}
+              </span>
+              <span className="flex items-center gap-2 shrink-0 ml-2">
+                {stats.added > 0 && (
+                  <span className="text-[10px] text-emerald-400">+{stats.added}</span>
+                )}
+                {stats.removed > 0 && (
+                  <span className="text-[10px] text-red-400">-{stats.removed}</span>
+                )}
+                <span className="text-neutral-600 text-xs">{isOpen ? "▾" : "▸"}</span>
+              </span>
+            </button>
+            {isOpen && <DiffView diff={f.diff} />}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -268,6 +325,30 @@ export default function ProposalsPage() {
                         </div>
                       )}
 
+                      {/* Commit / PR info for applied proposals */}
+                      {(p.commit_sha || p.pr_url) && (
+                        <div className="flex items-center gap-3 text-xs">
+                          {p.commit_sha && (
+                            <span className="flex items-center gap-1.5 text-neutral-400">
+                              <span className="text-neutral-600">commit</span>
+                              <code className="px-1.5 py-0.5 rounded bg-neutral-800 text-amber-400/80 font-mono text-[10px]">
+                                {p.commit_sha.slice(0, 8)}
+                              </code>
+                            </span>
+                          )}
+                          {p.pr_url && (
+                            <a
+                              href={p.pr_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-400 hover:text-blue-300 transition-colors"
+                            >
+                              View PR &rarr;
+                            </a>
+                          )}
+                        </div>
+                      )}
+
                       {/* Review notes input (for pending) */}
                       {p.status === "pending" && (
                         <div>
@@ -290,8 +371,8 @@ export default function ProposalsPage() {
                         </div>
                       )}
 
-                      {/* Diff */}
-                      <DiffView diff={p.diff} />
+                      {/* Diff — per-file sections if available, else fallback */}
+                      <FileDiffs files={p.files} fallbackDiff={p.diff} />
                     </div>
                   )}
                 </div>

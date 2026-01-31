@@ -59,8 +59,8 @@ async def _report_usage(result: ClaudeResult, session_name: str, chat_id: int, s
                 "source": "herald",
                 "started_at": started_at,
             })
-    except Exception:
-        log.debug("Failed to report usage to Manor API", exc_info=True)
+    except Exception as exc:
+        log.warning("chat=%d usage reporting failed: %s", chat_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -70,11 +70,14 @@ async def _report_usage(result: ClaudeResult, session_name: str, chat_id: int, s
 def md_to_telegram_html(text: str) -> str:
     """Convert a subset of Markdown to Telegram-supported HTML."""
     try:
+        # First escape all HTML to prevent injection
         escaped = html.escape(text)
 
+        # Replace code blocks (must come before inline code)
         def _replace_code_block(m: re.Match) -> str:
             lang = m.group(1) or ""
             code = html.unescape(m.group(2)).strip("\n")
+            # Code is already escaped from the initial escape, just wrap it
             if lang:
                 return f'<pre><code class="language-{lang}">{code}</code></pre>'
             return f"<pre><code>{code}</code></pre>"
@@ -83,16 +86,29 @@ def md_to_telegram_html(text: str) -> str:
             r"```(\w*)\n(.*?)```", _replace_code_block, escaped, flags=re.DOTALL
         )
 
+        # Replace inline code
         def _replace_inline_code(m: re.Match) -> str:
-            code = html.unescape(m.group(1))
+            # Code is already escaped from initial escape, just wrap it
+            code = m.group(1)
             return f"<code>{code}</code>"
 
         result = re.sub(r"`([^`]+)`", _replace_inline_code, result)
+
+        # Replace bold (must come before italic to handle ***)
         result = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", result)
+
+        # Replace italic (avoid matching **)
         result = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", result)
+
+        # Strip any remaining unsupported HTML tags that might have leaked through
+        # Telegram only supports: b, i, code, pre, a, u, s, strike, del
+        # Remove any <mark>, <span>, <div>, etc.
+        result = re.sub(r'<(?!/?(?:b|i|code|pre|a|u|s|strike|del|strong|em)\b)[^>]+>', '', result)
+
         return result
     except Exception:
         log.debug("md_to_telegram_html conversion failed", exc_info=True)
+        # Fallback: just escape everything
         return html.escape(text)
 
 
@@ -162,15 +178,33 @@ async def poll_outbox(bot: Bot, config: Config) -> None:
             for msg in messages:
                 try:
                     formatted = format_agent_message(msg.agent_name, msg.message)
+
+                    # Parse inline keyboard if present
+                    reply_markup = None
+                    if "__KEYBOARD__" in formatted:
+                        parts = formatted.split("__KEYBOARD__", 1)
+                        formatted = parts[0].strip()
+                        if len(parts) > 1:
+                            try:
+                                import json
+                                from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                                kbd = json.loads(parts[1])
+                                buttons = [[InlineKeyboardButton(text=b["text"], callback_data=b.get("callback_data", "")) for b in row] for row in kbd.get("inline_keyboard", [])]
+                                reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+                            except Exception:
+                                log.warning("Failed to parse keyboard", exc_info=True)
+
                     await bot.send_message(
-                        msg.chat_id, formatted, parse_mode=ParseMode.HTML
+                        msg.chat_id, formatted, parse_mode=ParseMode.HTML,
+                        reply_markup=reply_markup
                     )
                     mark_sent(str(outbox_db), msg.id)
+                    log.info("outbox: delivered msg %d to chat %d (%s)", msg.id, msg.chat_id, msg.agent_name)
                 except Exception:
-                    log.exception("Failed to deliver outbox message %d", msg.id)
+                    log.exception("outbox: failed to deliver msg %d to chat %d", msg.id, msg.chat_id)
                     mark_failed(str(outbox_db), msg.id)
-        except Exception:
-            pass  # DB might not exist yet, that's fine
+        except Exception as exc:
+            log.debug("outbox: poll error (DB may not exist yet): %s", exc)
         await asyncio.sleep(config.outbox_poll_interval_s)
 
 
@@ -197,6 +231,7 @@ async def process_queue(
         # Session management
         session = sessions.get_active(chat_id)
         if session and sessions.is_stale(session):
+            log.info("chat=%d session %s is stale, rotating", chat_id, session.name)
             session = sessions.rotate(chat_id, msg.user_id, session.name, session.model)
         if session is None:
             session = sessions.create(chat_id, msg.user_id)
@@ -234,8 +269,8 @@ async def process_queue(
                             parse_mode=ParseMode.HTML,
                         )
                         sent_message_id = sent.message_id
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.warning("chat=%d stream send_message failed: %s", chat_id, exc)
                 else:
                     try:
                         await bot.edit_message_text(
@@ -244,8 +279,8 @@ async def process_queue(
                             text=md_to_telegram_html(accumulated),
                             parse_mode=ParseMode.HTML,
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("chat=%d stream edit failed: %s", chat_id, exc)
                 last_edit_time = now
 
         try:
@@ -285,15 +320,15 @@ async def process_queue(
                         text=parts[0] or "Done.",
                         parse_mode=ParseMode.HTML,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.warning("chat=%d final edit_message failed: %s", chat_id, exc)
             else:
                 try:
                     await bot.send_message(
                         chat_id, parts[0] or "Done.", parse_mode=ParseMode.HTML
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.warning("chat=%d final send_message failed: %s", chat_id, exc)
 
             for part in parts[1:]:
                 await bot.send_message(chat_id, part, parse_mode=ParseMode.HTML)
@@ -332,7 +367,8 @@ async def process_queue(
                             chat_id=chat_id, message_id=sent_message_id,
                             text=first_part, parse_mode=ParseMode.HTML,
                         )
-                    except Exception:
+                    except Exception as exc:
+                        log.warning("chat=%d retry edit failed, sending new: %s", chat_id, exc)
                         await bot.send_message(chat_id, first_part, parse_mode=ParseMode.HTML)
                 else:
                     await bot.send_message(chat_id, first_part, parse_mode=ParseMode.HTML)
@@ -356,8 +392,8 @@ async def process_queue(
                 typing_task.cancel()
             try:
                 await bot.send_message(chat_id, f"Unexpected error: {e}")
-            except Exception:
-                pass
+            except Exception as send_exc:
+                log.error("chat=%d failed to send error message: %s", chat_id, send_exc)
 
     queue.mark_idle(chat_id)
 
@@ -675,7 +711,7 @@ def create_bot(
             await message.answer(f"\U0001f4dd Appended to '{name}'")
         else:
             note_path.write_text(f"# {name}\n\n{content}\n", encoding="utf-8")
-                        await message.answer(f"\U0001f4dd Created '{name}'")
+            await message.answer(f"\U0001f4dd Created '{name}'")
 
     # -- Proposal inline button handlers ------------------------------------
 
@@ -696,6 +732,15 @@ def create_bot(
                 resp.raise_for_status()
                 p = resp.json()
 
+                # First approve the proposal
+                resp = await client.patch(
+                    f"http://localhost:8700/api/proposals/{proposal_id}",
+                    json={"status": "approved", "review_notes": "Approved via Telegram"},
+                    timeout=5.0
+                )
+                resp.raise_for_status()
+
+                # Then apply it
                 resp = await client.post(
                     f"http://localhost:8700/api/proposals/{proposal_id}/apply",
                     timeout=30.0
@@ -713,7 +758,13 @@ def create_bot(
             await callback.message.edit_text(msg, parse_mode=ParseMode.HTML)
 
         except Exception as e:
-            await callback.message.answer(f"\u274c Error: {e}")
+            log.error("proposal approve failed for %s: %s", proposal_id, e)
+            error_msg = f"\u274c <b>Error</b>\n\n{str(e)}"
+            try:
+                await callback.message.edit_text(error_msg, parse_mode=ParseMode.HTML)
+            except Exception as edit_exc:
+                log.warning("Failed to edit proposal error message: %s", edit_exc)
+                await callback.message.answer(error_msg, parse_mode=ParseMode.HTML)
 
     @dp.callback_query(F.data.startswith("proposal_reject:"))
     async def handle_proposal_reject(callback: types.CallbackQuery):
@@ -738,7 +789,13 @@ def create_bot(
             )
 
         except Exception as e:
-            await callback.message.answer(f"\u274c Error: {e}")
+            log.error("proposal reject failed for %s: %s", proposal_id, e)
+            error_msg = f"\u274c <b>Error</b>\n\n{str(e)}"
+            try:
+                await callback.message.edit_text(error_msg, parse_mode=ParseMode.HTML)
+            except Exception as edit_exc:
+                log.warning("Failed to edit proposal error message: %s", edit_exc)
+                await callback.message.answer(error_msg, parse_mode=ParseMode.HTML)
 
     @dp.callback_query(F.data.startswith("proposal_info:"))
     async def handle_proposal_info(callback: types.CallbackQuery):
@@ -793,6 +850,87 @@ def create_bot(
             "/cancel \u2014 Cancel current request\n"
             "/help \u2014 Show this message"
         )
+
+    # -- Media messages --------------------------------------------------
+
+    @dp.message(F.photo)
+    async def handle_photo(message: types.Message):
+        chat_id = message.chat.id
+        try:
+            photo = message.photo[-1]  # highest resolution
+            file = await bot.get_file(photo.file_id)
+            if not file.file_path:
+                await message.answer("Could not download photo.")
+                return
+
+            scratchpad = Path(config.homestead_data_dir).expanduser() / "scratchpad"
+            scratchpad.mkdir(parents=True, exist_ok=True)
+            filename = f"img_{int(time.time())}_{photo.file_unique_id}.jpg"
+            dest = scratchpad / filename
+            await bot.download_file(file.file_path, str(dest))
+            log.info("chat=%d photo saved: %s (%d bytes)", chat_id, dest.name, dest.stat().st_size)
+
+            caption = message.caption or ""
+            text = f"[User sent an image: {dest}]\n{caption}".strip()
+        except Exception as exc:
+            log.error("chat=%d photo download failed: %s", chat_id, exc)
+            await message.answer("Failed to process photo.")
+            return
+
+        queued = QueuedMessage(
+            chat_id=chat_id,
+            user_id=message.from_user.id,
+            text=text,
+            timestamp=time.time(),
+        )
+        if not queue.enqueue(queued):
+            await message.answer("Too many queued messages, try again later.")
+            return
+
+        if queue.is_active(chat_id):
+            return
+
+        asyncio.create_task(process_queue(bot, chat_id, config, sessions, queue))
+
+    @dp.message(F.document)
+    async def handle_document(message: types.Message):
+        chat_id = message.chat.id
+        doc = message.document
+        try:
+            file = await bot.get_file(doc.file_id)
+            if not file.file_path:
+                await message.answer("Could not download file.")
+                return
+
+            scratchpad = Path(config.homestead_data_dir).expanduser() / "scratchpad"
+            scratchpad.mkdir(parents=True, exist_ok=True)
+            safe_name = doc.file_name or doc.file_unique_id
+            filename = f"doc_{int(time.time())}_{safe_name}"
+            dest = scratchpad / filename
+            await bot.download_file(file.file_path, str(dest))
+            log.info("chat=%d document saved: %s (%d bytes)", chat_id, dest.name, dest.stat().st_size)
+
+            caption = message.caption or ""
+            text = f"[User sent a file: {dest} ({doc.file_name or 'unnamed'})]\n{caption}".strip()
+        except Exception as exc:
+            log.error("chat=%d document download failed: %s", chat_id, exc)
+            await message.answer("Failed to process file.")
+            return
+
+        queued = QueuedMessage(
+            chat_id=chat_id,
+            user_id=message.from_user.id,
+            text=text,
+            timestamp=time.time(),
+        )
+        if not queue.enqueue(queued):
+            await message.answer("Too many queued messages, try again later.")
+            return
+
+        if queue.is_active(chat_id):
+            return
+
+        asyncio.create_task(process_queue(bot, chat_id, config, sessions, queue))
 
     # -- Text messages ---------------------------------------------------
 

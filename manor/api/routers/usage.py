@@ -9,6 +9,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from ..config import settings
 
@@ -141,6 +142,45 @@ def record_usage(
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+class UsageRecord(BaseModel):
+    session_id: str
+    chat_id: int = 0
+    session_name: str = ""
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    cost_usd: float | None = None
+    num_turns: int = 0
+    source: str = "chat"
+    started_at: float
+    completed_at: float | None = None
+    extra: dict[str, Any] | None = None
+
+
+@router.post("")
+def create_usage(body: UsageRecord):
+    """Record a usage entry (called by Herald and other external agents)."""
+    record_id = record_usage(
+        session_id=body.session_id,
+        chat_id=body.chat_id,
+        session_name=body.session_name,
+        model=body.model,
+        input_tokens=body.input_tokens,
+        output_tokens=body.output_tokens,
+        cache_creation_tokens=body.cache_creation_tokens,
+        cache_read_tokens=body.cache_read_tokens,
+        cost_usd=body.cost_usd,
+        num_turns=body.num_turns,
+        source=body.source,
+        started_at=body.started_at,
+        completed_at=body.completed_at,
+        extra=body.extra,
+    )
+    return {"id": record_id}
 
 
 @router.get("")

@@ -27,7 +27,7 @@ export default function RootLayout({
       <body className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
         <div className="flex h-screen overflow-hidden">
           <Sidebar />
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex-1 flex flex-col overflow-y-auto">
             {children}
           </div>
         </div>

@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import time
 from typing import Callable, Awaitable
+
+import httpx
 
 from herald.config import Config
 from herald.claude import spawn_claude, ClaudeResult
@@ -10,6 +14,8 @@ from herald.prompt import assemble_system_prompt
 from herald.sessions import SessionMeta
 
 log = logging.getLogger(__name__)
+
+_MANOR_API_URL = os.environ.get("MANOR_API_URL", "http://localhost:8700")
 
 # Model -> Claude CLI model name mapping
 _CLI_MODELS = {
@@ -40,6 +46,30 @@ def refresh_prompt(config: Config) -> str:
     return _cached_prompt
 
 
+async def _report_usage(result: ClaudeResult, session: SessionMeta, started_at: float) -> None:
+    """POST usage data to Manor API (best-effort)."""
+    if result.input_tokens == 0 and result.output_tokens == 0:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(f"{_MANOR_API_URL}/api/usage", json={
+                "session_id": result.session_id,
+                "chat_id": session.chat_id,
+                "session_name": session.name,
+                "model": result.model or session.model,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
+                "cache_creation_tokens": result.cache_creation_tokens,
+                "cache_read_tokens": result.cache_read_tokens,
+                "cost_usd": result.cost_usd,
+                "num_turns": result.num_turns,
+                "source": "herald",
+                "started_at": started_at,
+            })
+    except Exception:
+        log.warning("Failed to report usage to Manor API", exc_info=True)
+
+
 async def dispatch_message(
     prompt: str,
     session: SessionMeta,
@@ -49,9 +79,10 @@ async def dispatch_message(
     """Route a message to the right model backend."""
     model = session.model
     system_prompt = _get_system_prompt(config)
+    started_at = time.time()
 
     if model in _CLI_MODELS:
-        return await spawn_claude(
+        result = await spawn_claude(
             prompt,
             session.claude_session_id,
             session.message_count > 0,
@@ -59,21 +90,30 @@ async def dispatch_message(
             on_delta,
             model_name=_CLI_MODELS.get(model),
             system_prompt=system_prompt,
+            chat_id=session.chat_id,
+        )
+    elif model == "grok":
+        result = await _call_xai(prompt, session, config, on_delta, system_prompt)
+    else:
+        # Fallback: try Claude CLI default
+        log.warning("Unknown model %r, falling back to claude CLI default", model)
+        result = await spawn_claude(
+            prompt,
+            session.claude_session_id,
+            session.message_count > 0,
+            config,
+            on_delta,
+            system_prompt=system_prompt,
+            chat_id=session.chat_id,
         )
 
-    if model == "grok":
-        return await _call_xai(prompt, session, config, on_delta, system_prompt)
+    # Record usage for all providers
+    try:
+        await _report_usage(result, session, started_at)
+    except Exception as exc:
+        log.warning("Usage reporting failed: %s", exc)
 
-    # Fallback: try Claude CLI default
-    log.warning("Unknown model %r, falling back to claude CLI default", model)
-    return await spawn_claude(
-        prompt,
-        session.claude_session_id,
-        session.message_count > 0,
-        config,
-        on_delta,
-        system_prompt=system_prompt,
-    )
+    return result
 
 
 async def _call_xai(

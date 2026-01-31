@@ -19,6 +19,7 @@ import httpx
 # ---------------------------------------------------------------------------
 
 MANOR_API = os.environ.get("MANOR_API_URL", "http://localhost:8700")
+AGENT_NAME = os.environ.get("AGENT_NAME", "Milo")
 SERVER_NAME = "mcp-homestead"
 SERVER_VERSION = "0.1.0"
 PROTOCOL_VERSION = "2024-11-05"
@@ -355,7 +356,7 @@ TOOLS: list[dict] = [
     # ── Proposals ──────────────────────────────────────────────────────
     {
         "name": "propose_code_change",
-        "description": "Create a code change proposal for review.",
+        "description": "Create a code change proposal for review. Supports single or multi-file changes.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -364,9 +365,22 @@ TOOLS: list[dict] = [
                     "type": "string",
                     "description": "Description of the proposed change.",
                 },
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {"type": "string", "description": "Path of the file to change."},
+                            "original_content": {"type": "string", "description": "Original file content (or relevant section)."},
+                            "new_content": {"type": "string", "description": "Proposed new content."},
+                        },
+                        "required": ["file_path", "original_content", "new_content"],
+                    },
+                    "description": "List of files to change (for multi-file proposals).",
+                },
                 "file_path": {
                     "type": "string",
-                    "description": "Path of the file to change.",
+                    "description": "Path of the file to change (single-file shorthand).",
                 },
                 "original_content": {
                     "type": "string",
@@ -377,7 +391,7 @@ TOOLS: list[dict] = [
                     "description": "Proposed new content.",
                 },
             },
-            "required": ["title", "description", "file_path", "original_content", "new_content"],
+            "required": ["title", "description"],
         },
     },
     {
@@ -563,17 +577,17 @@ def handle_tool_call(name: str, arguments: dict) -> str:
 
     # ── Proposals ──────────────────────────────────────────────────────
     elif name == "propose_code_change":
-        result = _api(
-            "POST",
-            "/api/proposals",
-            json={
-                "title": arguments["title"],
-                "description": arguments["description"],
-                "file_path": arguments["file_path"],
-                "original_content": arguments["original_content"],
-                "new_content": arguments["new_content"],
-            },
-        )
+        payload: dict = {
+            "title": arguments["title"],
+            "description": arguments.get("description", ""),
+        }
+        if arguments.get("files"):
+            payload["files"] = arguments["files"]
+        elif arguments.get("file_path"):
+            payload["file_path"] = arguments["file_path"]
+            payload["original_content"] = arguments.get("original_content", "")
+            payload["new_content"] = arguments.get("new_content", "")
+        result = _api("POST", "/api/proposals", json=payload)
 
     elif name == "list_proposals":
         params = {}
@@ -595,7 +609,7 @@ def handle_tool_call(name: str, arguments: dict) -> str:
             "/api/outbox",
             json={
                 "chat_id": arguments["chat_id"],
-                "agent_name": arguments.get("agent_name", "milo"),
+                "agent_name": arguments.get("agent_name", AGENT_NAME.lower()),
                 "message": arguments["message"],
             },
         )

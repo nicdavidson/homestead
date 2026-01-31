@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +19,7 @@ EDITABLE_FIELDS: dict[str, type] = {
     "allowed_origins": list,
     "proposal_test_cmd": str,
     "proposal_branch": str,
+    "agent_name": str,
 }
 
 
@@ -38,6 +40,7 @@ class Settings:
     subagent_model: str = "sonnet"  # default model for MCP sub-agents
     proposal_test_cmd: str = ""  # shell command to run before committing proposals
     proposal_branch: str = ""  # branch to commit proposals on (empty = commit on current branch)
+    agent_name: str = "Milo"  # display name for the agent
 
     # -- derived paths ---------------------------------------------------------
 
@@ -68,6 +71,10 @@ class Settings:
     @property
     def proposals_db(self) -> Path:
         return Path(self.homestead_data_dir).expanduser() / "proposals.db"
+
+    @property
+    def workspaces_dir(self) -> Path:
+        return Path(self.homestead_data_dir).expanduser() / "workspaces"
 
     @property
     def lore_path(self) -> Path:
@@ -135,6 +142,20 @@ def save_config_overrides(updates: dict) -> dict:
     return existing
 
 
+def _find_claude_cli() -> str | None:
+    """Search common npm global locations for the claude binary."""
+    home = Path.home()
+    candidates = [
+        home / ".npm-global" / "bin" / "claude",
+        home / ".local" / "bin" / "claude",
+        Path("/usr/local/bin/claude"),
+    ]
+    for p in candidates:
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+    return None
+
+
 def load_settings() -> Settings:
     """Build a Settings instance from environment variables / .env."""
     load_dotenv()
@@ -184,7 +205,10 @@ def load_settings() -> Settings:
         homestead_data_dir=homestead_dir,
         herald_data_dir=herald_data_dir,
         lore_dir=lore_dir,
-        claude_cli_path=os.environ.get("CLAUDE_CLI_PATH", "claude"),
+        claude_cli_path=os.environ.get("CLAUDE_CLI_PATH", "")
+            or shutil.which("claude")
+            or _find_claude_cli()
+            or "claude",
         allowed_origins=allowed_origins,
         claude_timeout_s=float(os.environ.get("CLAUDE_TIMEOUT_S", "300")),
         max_turns=int(os.environ.get("MAX_TURNS", "10")),
@@ -193,6 +217,7 @@ def load_settings() -> Settings:
         subagent_model=os.environ.get("SUBAGENT_MODEL", "sonnet"),
         proposal_test_cmd=os.environ.get("PROPOSAL_TEST_CMD", ""),
         proposal_branch=os.environ.get("PROPOSAL_BRANCH", ""),
+        agent_name=os.environ.get("AGENT_NAME", "Milo"),
     )
 
     # Apply any saved overrides from the UI

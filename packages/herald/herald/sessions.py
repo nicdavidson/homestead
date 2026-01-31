@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 import uuid
@@ -7,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from herald.config import Config
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -117,15 +120,12 @@ class SessionManager:
 
     # -- write -----------------------------------------------------------------
 
-        def create(self, chat_id: int, user_id: int, name: str = "default", model: str = "claude") -> SessionMeta:
+    def create(self, chat_id: int, user_id: int, name: str = "default", model: str = "claude") -> SessionMeta:
         """Create or replace a global session (chat_id/user_id kept for backward compat)."""
-        import logging
-        log = logging.getLogger(__name__)
-        
         now = time.time()
         session_id = str(uuid.uuid4())
         log.info(f"[session:{name}] Creating new session with ID {session_id[:8]}...")
-        
+
         self._conn.execute(
             "INSERT OR REPLACE INTO sessions "
             "(name, claude_session_id, model, is_active, created_at, last_active_at, message_count, user_id, chat_id) "
@@ -185,6 +185,7 @@ class SessionManager:
 
     def set_model(self, chat_id: int, name: str, model: str) -> None:
         """Change the model for an existing session (chat_id ignored)."""
+        log.info("[session:%s] model changed to %s", name, model)
         self._conn.execute(
             "UPDATE sessions SET model = ? WHERE name = ?",
             (model, name),
@@ -193,6 +194,7 @@ class SessionManager:
 
     def update_session_id(self, session: SessionMeta, new_id: str) -> None:
         """Update the Claude CLI session ID (after first response)."""
+        log.info("[session:%s] claude_session_id updated: %s -> %s", session.name, session.claude_session_id[:8], new_id[:8])
         session.claude_session_id = new_id
         self._conn.execute(
             "UPDATE sessions SET claude_session_id = ? WHERE name = ?",

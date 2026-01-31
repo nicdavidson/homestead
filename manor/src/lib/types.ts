@@ -173,6 +173,11 @@ export interface AggregatedMetrics {
 
 // --- Proposals ---
 
+export interface ProposalFile {
+  file_path: string;
+  diff: string;
+}
+
 export interface Proposal {
   id: string;
   session_id: string;
@@ -180,11 +185,14 @@ export interface Proposal {
   description: string;
   diff: string;
   file_paths: string[];
+  files: ProposalFile[];
   status: "pending" | "approved" | "rejected" | "applied" | "failed";
   created_at: number;
   reviewed_at: number | null;
   applied_at: number | null;
   review_notes: string;
+  pr_url: string;
+  commit_sha: string;
 }
 
 export interface ProposalListResponse {

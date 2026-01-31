@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Homestead CLI — talk to Milo from the terminal.
+"""Homestead CLI — talk to your agent from the terminal.
 
 Usage:
     homestead                       # Interactive mode
@@ -26,6 +26,7 @@ MCP_CONFIG = REPO_ROOT / "manor" / "mcp-config.json"
 HOMESTEAD_DIR = Path(os.environ.get("HOMESTEAD_DATA_DIR", "~/.homestead")).expanduser()
 SKILLS_DIR = HOMESTEAD_DIR / "skills"
 SCRATCHPAD_DIR = HOMESTEAD_DIR / "scratchpad"
+AGENT_NAME = os.environ.get("AGENT_NAME", "Milo")
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +151,7 @@ def assemble_system_prompt() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="homestead",
-        description="Talk to Milo via the terminal.",
+        description=f"Talk to {AGENT_NAME} via the terminal.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("prompt", nargs="?", help="One-shot prompt (omit for interactive)")

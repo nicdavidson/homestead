@@ -218,6 +218,7 @@ async def _spawn_and_stream(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=1024 * 1024,  # 1 MB — system prompt can produce large JSON lines
     )
 
     proc_key = f"{chat_id}:{session_name}"

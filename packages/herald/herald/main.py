@@ -99,7 +99,7 @@ async def run() -> None:
     queue = MessageQueue(config.max_queue_size)
     bot, dp = create_bot(config, sessions, queue, watchtower=wt)
 
-        # Log active session on startup
+    # Log active session on startup
     active = sessions.get_active(0)
     if active:
         log.info(f"Herald is running (active session: {active.name})")

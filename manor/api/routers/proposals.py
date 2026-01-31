@@ -192,8 +192,49 @@ def _rollback_files(saved: dict[str, str | None]) -> None:
             abs_fp.write_text(content, encoding="utf-8")
 
 
+def _send_telegram_notification(proposal_id: str, title: str, description: str, file_paths: list[str]) -> None:
+    """Send Telegram notification with inline buttons for new proposal."""
+    try:
+        import sys
+        sys.path.insert(0, str(Path(REPO_ROOT) / "packages" / "common"))
+        from common.outbox import post_message
+
+        msg = f"📋 <b>New Proposal</b>\n\n"
+        msg += f"<b>{title}</b>\n\n"
+        if description:
+            msg += f"{description}\n\n"
+        msg += f"<b>Files:</b> {len(file_paths)}\n"
+        for fp in file_paths[:3]:
+            msg += f"  • <code>{fp}</code>\n"
+        if len(file_paths) > 3:
+            msg += f"  ... and {len(file_paths) - 3} more\n"
+
+        # Add inline keyboard markup as JSON in the message
+        # Herald bot will parse this and create InlineKeyboardMarkup
+        import json
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "✅ Approve", "callback_data": f"proposal_approve:{proposal_id}"},
+                {"text": "❌ Reject", "callback_data": f"proposal_reject:{proposal_id}"},
+                {"text": "ℹ️ More Info", "callback_data": f"proposal_info:{proposal_id}"}
+            ]]
+        }
+        msg += f"\n__KEYBOARD__{json.dumps(keyboard)}"
+
+        from ..config import settings
+        post_message(
+            db_path=str(settings.outbox_db),
+            chat_id=6038780843,  # Milo's chat ID
+            agent_name="Proposals",
+            message=msg,
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass  # Don't fail proposal creation if notification fails
+
+
 # ---------------------------------------------------------------------------
-# Endpoints
+# File resolution
 # ---------------------------------------------------------------------------
 
 
@@ -257,6 +298,11 @@ def _resolve_file(file_path: str, original_content: str, new_content: str) -> tu
         )
     )
     return actual_original, full_new, diff_text
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.post("")
@@ -337,14 +383,14 @@ def create_proposal(body: CreateProposalBody):
                 (str(uuid.uuid4()), proposal_id, fp, orig, new, diff, i),
             )
 
-                conn.commit()
+        conn.commit()
 
         row = _fetch_proposal(conn, proposal_id)
         result = _row_to_dict(row, conn)
-        
+
         # Send Telegram notification
         _send_telegram_notification(proposal_id, body.title, body.description, file_paths)
-        
+
         return result
     finally:
         conn.close()
@@ -452,7 +498,13 @@ def _current_branch() -> str:
 
 @router.post("/{proposal_id}/apply")
 def apply_proposal(proposal_id: str):
-    """Apply an approved proposal, optionally on a dedicated branch with a PR."""
+    """Apply an approved proposal: write files, test, commit, push.
+
+    The repo is assumed to already be on the agent's branch (e.g. 'milo').
+    No branch switching happens. On test failure, files are rolled back so the
+    branch stays clean. On other failures after commit, the state stays in git
+    for the agent to inspect and fix.
+    """
     conn = _get_conn()
     try:
         row = _fetch_proposal(conn, proposal_id)
@@ -490,9 +542,9 @@ def apply_proposal(proposal_id: str):
             if file_paths and new_content:
                 file_content_map[file_paths[0]] = new_content
 
-        proposal_branch = settings.proposal_branch  # e.g. "milo", or "" for current branch
+        proposal_branch = settings.proposal_branch  # e.g. "milo"
 
-        # Save originals for rollback
+        # Save originals for rollback (test failures roll back, other failures don't)
         saved_originals: dict[str, str | None] = {}
         for fp in file_paths:
             abs_fp = Path(REPO_ROOT) / fp
@@ -501,30 +553,9 @@ def apply_proposal(proposal_id: str):
             else:
                 saved_originals[fp] = None
 
-        original_branch = _current_branch()
-        switched_branch = False
-        pr_url = ""
-
         try:
-            # Switch to proposal branch if configured
-            if proposal_branch:
-                _git(["fetch", "origin", proposal_branch], timeout=30)
-
-                check = _git(["rev-parse", "--verify", proposal_branch])
-                if check.returncode != 0:
-                    remote_check = _git(["rev-parse", "--verify", f"origin/{proposal_branch}"])
-                    if remote_check.returncode == 0:
-                        _git(["checkout", "-b", proposal_branch, f"origin/{proposal_branch}"], check=True)
-                    else:
-                        _git(["checkout", "-b", proposal_branch], check=True)
-                else:
-                    _git(["checkout", proposal_branch], check=True)
-                    _git(["pull", "--ff-only", "origin", proposal_branch], timeout=30)
-
-                switched_branch = True
-
+            # Write files
             if file_content_map:
-                # Direct file write for each file
                 for fp, content in file_content_map.items():
                     file_abs = Path(REPO_ROOT) / fp
                     file_abs.parent.mkdir(parents=True, exist_ok=True)
@@ -540,7 +571,7 @@ def apply_proposal(proposal_id: str):
                     )
                 _git(["apply", "-"], input=diff_text, check=True)
 
-            # Run test command (if configured) before committing
+            # Run tests before committing — rollback on failure
             test_cmd = settings.proposal_test_cmd
             if test_cmd:
                 test_result = subprocess.run(
@@ -575,53 +606,17 @@ def apply_proposal(proposal_id: str):
             sha_result = _git(["rev-parse", "HEAD"])
             commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else ""
 
-            # Push and create PR if using a dedicated branch
+            # Push to the agent's branch
             if proposal_branch:
                 push_result = _git(["push", "origin", proposal_branch], timeout=60)
                 if push_result.returncode != 0:
+                    # Push failed but commit is local — agent can inspect
                     raise subprocess.CalledProcessError(
                         push_result.returncode, "git push",
                         push_result.stderr.strip() or push_result.stdout.strip(),
                     )
 
-                # Create PR via gh CLI
-                pr_body = row["description"] or f"Automated proposal: {title}"
-                pr_result = subprocess.run(
-                    [
-                        "gh", "pr", "create",
-                        "--base", "master",
-                        "--head", proposal_branch,
-                        "--title", title,
-                        "--body", pr_body,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    cwd=REPO_ROOT,
-                    timeout=30,
-                )
-                if pr_result.returncode == 0:
-                    pr_url = pr_result.stdout.strip()
-                else:
-                    # PR creation failed — might already exist. Try to find existing.
-                    list_result = subprocess.run(
-                        ["gh", "pr", "list", "--head", proposal_branch, "--json", "url", "--limit", "1"],
-                        capture_output=True,
-                        text=True,
-                        cwd=REPO_ROOT,
-                        timeout=15,
-                    )
-                    if list_result.returncode == 0:
-                        try:
-                            prs = json.loads(list_result.stdout)
-                            if prs:
-                                pr_url = prs[0]["url"]
-                        except (json.JSONDecodeError, KeyError, IndexError):
-                            pass
-
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-            # Rollback on any failure
-            _rollback_files(saved_originals)
-
             error_detail = str(exc)
             if isinstance(exc, subprocess.CalledProcessError):
                 error_detail = exc.stderr or exc.output or str(exc)
@@ -638,22 +633,14 @@ def apply_proposal(proposal_id: str):
             )
             conn.commit()
 
-            # Switch back to original branch
-            if switched_branch:
-                _git(["checkout", original_branch])
-
             row = _fetch_proposal(conn, proposal_id)
             return _row_to_dict(row, conn)
-
-        # Switch back to original branch
-        if switched_branch:
-            _git(["checkout", original_branch])
 
         # Success — mark as applied
         now = time.time()
         conn.execute(
-            "UPDATE proposals SET status = ?, applied_at = ?, pr_url = ?, commit_sha = ? WHERE id = ?",
-            ("applied", now, pr_url, commit_sha, proposal_id),
+            "UPDATE proposals SET status = ?, applied_at = ?, commit_sha = ? WHERE id = ?",
+            ("applied", now, commit_sha, proposal_id),
         )
         conn.commit()
 
@@ -669,6 +656,7 @@ def delete_proposal(proposal_id: str):
     conn = _get_conn()
     try:
         row = _fetch_proposal(conn, proposal_id)
+        conn.execute("DELETE FROM proposal_files WHERE proposal_id = ?", (proposal_id,))
         conn.execute("DELETE FROM proposals WHERE id = ?", (proposal_id,))
         conn.commit()
         return {"deleted": True, "id": proposal_id}
