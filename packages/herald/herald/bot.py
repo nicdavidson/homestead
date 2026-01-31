@@ -76,13 +76,16 @@ def split_message(text: str, max_len: int = 4000) -> list[str]:
         if len(text) <= max_len:
             chunks.append(text)
             break
+        # Try to find a good break point (newline, then space)
         split_at = text.rfind("\n", 0, max_len)
         if split_at == -1:
             split_at = text.rfind(" ", 0, max_len)
-        if split_at == -1:
+        # If still no break point found, force split at max_len
+        if split_at == -1 or split_at == 0:
             split_at = max_len
         chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
+        # Remove the chunk and strip leading whitespace
+        text = text[split_at:].lstrip("\n ")
     return chunks
 
 
@@ -185,13 +188,15 @@ async def process_queue(
         last_edit_time = 0.0
         sent_message_id: int | None = None
 
-                async def on_delta(text: str) -> None:
+        async def on_delta(text: str) -> None:
             nonlocal accumulated, last_edit_time, sent_message_id, typing_task
             accumulated += text
             now = time.time()
             if now - last_edit_time >= config.streaming_interval_s and accumulated.strip():
                 if sent_message_id is None:
-                    # Keep typing indicator active during streaming
+                    if typing_task is not None:
+                        typing_task.cancel()
+                        typing_task = None
                     try:
                         sent = await bot.send_message(
                             chat_id,
