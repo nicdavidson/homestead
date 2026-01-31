@@ -186,11 +186,12 @@ async def process_queue(
         sent_message_id: int | None = None
 
                 async def on_delta(text: str) -> None:
-            nonlocal accumulated, last_edit_time, sent_message_id
+            nonlocal accumulated, last_edit_time, sent_message_id, typing_task
             accumulated += text
             now = time.time()
             if now - last_edit_time >= config.streaming_interval_s and accumulated.strip():
                 if sent_message_id is None:
+                    # Keep typing indicator active during streaming
                     try:
                         sent = await bot.send_message(
                             chat_id,
