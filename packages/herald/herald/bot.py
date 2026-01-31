@@ -185,15 +185,12 @@ async def process_queue(
         last_edit_time = 0.0
         sent_message_id: int | None = None
 
-        async def on_delta(text: str) -> None:
-            nonlocal accumulated, last_edit_time, sent_message_id, typing_task
+                async def on_delta(text: str) -> None:
+            nonlocal accumulated, last_edit_time, sent_message_id
             accumulated += text
             now = time.time()
             if now - last_edit_time >= config.streaming_interval_s and accumulated.strip():
                 if sent_message_id is None:
-                    if typing_task is not None:
-                        typing_task.cancel()
-                        typing_task = None
                     try:
                         sent = await bot.send_message(
                             chat_id,
