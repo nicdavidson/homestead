@@ -16,6 +16,7 @@ EDITABLE_FIELDS: dict[str, type] = {
     "max_turns": int,
     "claude_timeout_s": float,
     "allowed_origins": list,
+    "proposal_test_cmd": str,
 }
 
 
@@ -34,6 +35,7 @@ class Settings:
         "claude-haiku-4-20250414",
     ])
     subagent_model: str = "sonnet"  # default model for MCP sub-agents
+    proposal_test_cmd: str = ""  # shell command to run before committing proposals
 
     # -- derived paths ---------------------------------------------------------
 
@@ -187,6 +189,7 @@ def load_settings() -> Settings:
         port=int(os.environ.get("MANOR_PORT", "8700")),
         allowed_models=allowed_models,
         subagent_model=os.environ.get("SUBAGENT_MODEL", "sonnet"),
+        proposal_test_cmd=os.environ.get("PROPOSAL_TEST_CMD", ""),
     )
 
     # Apply any saved overrides from the UI

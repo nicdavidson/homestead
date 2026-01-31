@@ -595,6 +595,7 @@ def handle_tool_call(name: str, arguments: dict) -> str:
             "/api/outbox",
             json={
                 "chat_id": arguments["chat_id"],
+                "agent_name": arguments.get("agent_name", "milo"),
                 "message": arguments["message"],
             },
         )

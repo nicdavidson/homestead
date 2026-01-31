@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS proposals (
     description     TEXT NOT NULL DEFAULT '',
     diff            TEXT NOT NULL,
     file_paths_json TEXT NOT NULL DEFAULT '[]',
+    original_content TEXT NOT NULL DEFAULT '',
+    new_content     TEXT NOT NULL DEFAULT '',
     status          TEXT NOT NULL DEFAULT 'pending',
     created_at      REAL NOT NULL,
     reviewed_at     REAL,
@@ -45,6 +47,11 @@ CREATE TABLE IF NOT EXISTS proposals (
     review_notes    TEXT DEFAULT ''
 )
 """
+
+_MIGRATE_COLUMNS = [
+    "ALTER TABLE proposals ADD COLUMN original_content TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE proposals ADD COLUMN new_content TEXT NOT NULL DEFAULT ''",
+]
 
 _CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals (status)",
@@ -67,12 +74,18 @@ def _get_conn() -> sqlite3.Connection:
     conn.execute(_CREATE_TABLE)
     for idx in _CREATE_INDEXES:
         conn.execute(idx)
+    # Migrate: add columns if missing (idempotent)
+    for stmt in _MIGRATE_COLUMNS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
     return conn
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
-    return {
+    d = {
         "id": row["id"],
         "session_id": row["session_id"],
         "title": row["title"],
@@ -85,6 +98,14 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "applied_at": row["applied_at"],
         "review_notes": row["review_notes"],
     }
+    # New columns (may be absent in old rows)
+    try:
+        d["original_content"] = row["original_content"]
+        d["new_content"] = row["new_content"]
+    except (IndexError, KeyError):
+        d["original_content"] = ""
+        d["new_content"] = ""
+    return d
 
 
 def _fetch_proposal(conn: sqlite3.Connection, proposal_id: str) -> sqlite3.Row:
@@ -116,6 +137,16 @@ class UpdateStatusBody(BaseModel):
     review_notes: str = ""
 
 
+def _rollback_files(saved: dict[str, str | None]) -> None:
+    """Restore files to their pre-apply state."""
+    for fp, content in saved.items():
+        abs_fp = Path(REPO_ROOT) / fp
+        if content is None:
+            abs_fp.unlink(missing_ok=True)
+        else:
+            abs_fp.write_text(content, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -123,9 +154,43 @@ class UpdateStatusBody(BaseModel):
 
 @router.post("")
 def create_proposal(body: CreateProposalBody):
-    """Create a new proposal with a server-generated unified diff."""
-    original_lines = body.original_content.splitlines(keepends=True)
-    new_lines = body.new_content.splitlines(keepends=True)
+    """Create a new proposal with a server-generated unified diff.
+
+    The agent provides original_content and new_content.  When possible we read
+    the actual file from disk so the diff has correct context.  If the agent
+    sent a snippet, we find it in the real file and build the full new content
+    so apply always works via direct file write.
+    """
+    file_abs = Path(REPO_ROOT) / body.file_path
+    actual_original = ""
+    full_new_content = body.new_content
+
+    if file_abs.is_file():
+        actual_original = file_abs.read_text(encoding="utf-8")
+
+        # If the agent sent the full file, use it as-is.
+        # If it sent a snippet, locate it in the real file and splice in the
+        # new content so we always store a complete replacement.
+        agent_original = body.original_content.strip()
+        if agent_original and agent_original != actual_original.strip():
+            # Snippet mode — find the snippet in the real file and replace it
+            idx = actual_original.find(agent_original)
+            if idx == -1:
+                # Try with stripped lines (whitespace tolerance)
+                idx = actual_original.find(body.original_content)
+            if idx >= 0:
+                full_new_content = (
+                    actual_original[:idx]
+                    + body.new_content
+                    + actual_original[idx + len(agent_original):]
+                )
+            # else: can't locate snippet — fall through, store as-is
+    else:
+        actual_original = body.original_content
+
+    # Generate diff from the real file content
+    original_lines = actual_original.splitlines(keepends=True)
+    new_lines = full_new_content.splitlines(keepends=True)
 
     diff_text = "".join(
         difflib.unified_diff(
@@ -150,8 +215,8 @@ def create_proposal(body: CreateProposalBody):
         conn.execute(
             "INSERT INTO proposals "
             "(id, session_id, title, description, diff, file_paths_json, "
-            "status, created_at, review_notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "original_content, new_content, status, created_at, review_notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 proposal_id,
                 body.session_id,
@@ -159,6 +224,8 @@ def create_proposal(body: CreateProposalBody):
                 body.description,
                 diff_text,
                 json.dumps([body.file_path]),
+                actual_original,
+                full_new_content,
                 "pending",
                 now,
                 "",
@@ -262,7 +329,7 @@ def update_proposal_status(proposal_id: str, body: UpdateStatusBody):
 
 @router.post("/{proposal_id}/apply")
 def apply_proposal(proposal_id: str):
-    """Apply an approved proposal by running git apply and committing."""
+    """Apply an approved proposal by writing the new content and committing."""
     conn = _get_conn()
     try:
         row = _fetch_proposal(conn, proposal_id)
@@ -275,38 +342,81 @@ def apply_proposal(proposal_id: str):
                        f"Only approved proposals can be applied.",
             )
 
-        diff_text = row["diff"]
         title = row["title"]
-
-        # Apply the diff using git apply
+        file_paths = json.loads(row["file_paths_json"]) if row["file_paths_json"] else []
+        new_content = ""
         try:
-            apply_result = subprocess.run(
-                ["git", "apply", "--check", "-"],
-                input=diff_text,
-                capture_output=True,
-                text=True,
-                cwd=REPO_ROOT,
-                timeout=30,
-            )
-            if apply_result.returncode != 0:
-                error_msg = apply_result.stderr.strip() or apply_result.stdout.strip()
-                raise subprocess.CalledProcessError(
-                    apply_result.returncode, "git apply --check", error_msg
+            new_content = row["new_content"]
+        except (IndexError, KeyError):
+            pass
+
+        # Save originals for rollback
+        saved_originals: dict[str, str | None] = {}
+        for fp in file_paths:
+            abs_fp = Path(REPO_ROOT) / fp
+            if abs_fp.is_file():
+                saved_originals[fp] = abs_fp.read_text(encoding="utf-8")
+            else:
+                saved_originals[fp] = None
+
+        try:
+            if new_content and len(file_paths) == 1:
+                # Direct file write — reliable, no diff context issues
+                file_abs = Path(REPO_ROOT) / file_paths[0]
+                file_abs.parent.mkdir(parents=True, exist_ok=True)
+                file_abs.write_text(new_content, encoding="utf-8")
+            else:
+                # Fallback to git apply for legacy proposals without stored content
+                diff_text = row["diff"]
+                apply_result = subprocess.run(
+                    ["git", "apply", "--check", "-"],
+                    input=diff_text,
+                    capture_output=True,
+                    text=True,
+                    cwd=REPO_ROOT,
+                    timeout=30,
+                )
+                if apply_result.returncode != 0:
+                    error_msg = apply_result.stderr.strip() or apply_result.stdout.strip()
+                    raise subprocess.CalledProcessError(
+                        apply_result.returncode, "git apply --check", error_msg
+                    )
+                subprocess.run(
+                    ["git", "apply", "-"],
+                    input=diff_text,
+                    capture_output=True,
+                    text=True,
+                    cwd=REPO_ROOT,
+                    timeout=30,
+                    check=True,
                 )
 
-            # Dry-run passed — apply for real
-            subprocess.run(
-                ["git", "apply", "-"],
-                input=diff_text,
-                capture_output=True,
-                text=True,
-                cwd=REPO_ROOT,
-                timeout=30,
-                check=True,
-            )
+            # Run test command (if configured) before committing
+            test_cmd = settings.proposal_test_cmd
+            if test_cmd:
+                test_result = subprocess.run(
+                    test_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=REPO_ROOT,
+                    timeout=120,
+                )
+                if test_result.returncode != 0:
+                    # Tests failed — rollback files
+                    _rollback_files(saved_originals)
+                    test_output = (
+                        test_result.stderr.strip()
+                        or test_result.stdout.strip()
+                        or "exit code " + str(test_result.returncode)
+                    )
+                    raise subprocess.CalledProcessError(
+                        test_result.returncode,
+                        f"test: {test_cmd}",
+                        test_output,
+                    )
 
-            # Stage all changed files and commit
-            file_paths = json.loads(row["file_paths_json"]) if row["file_paths_json"] else []
+            # Stage and commit
             for fp in file_paths:
                 subprocess.run(
                     ["git", "add", fp],
@@ -326,13 +436,13 @@ def apply_proposal(proposal_id: str):
                 check=True,
             )
 
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            # Mark as failed and store the error
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+            # Rollback on any failure
+            _rollback_files(saved_originals)
+
             error_detail = str(exc)
-            if isinstance(exc, subprocess.CalledProcessError) and exc.output:
-                error_detail = exc.output
-            elif isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
-                error_detail = exc.stderr
+            if isinstance(exc, subprocess.CalledProcessError):
+                error_detail = exc.stderr or exc.output or str(exc)
 
             now = time.time()
             existing_notes = row["review_notes"] or ""
