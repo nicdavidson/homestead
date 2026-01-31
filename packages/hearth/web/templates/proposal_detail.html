@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h2>{{ proposal.title }}</h2>
+        <p class="text-secondary mb-20">{{ proposal.description }}</p>
+
+        <div class="mb-20">
+            <span class="badge {% if proposal.status == 'pending' %}warning{% elif proposal.status == 'approved' %}success{% else %}{% endif %}">
+                {{ proposal.status }}
+            </span>
+            <span class="text-secondary" style="margin-left: 10px;">
+                Created: {{ proposal.created_at }}
+            </span>
+        </div>
+
+        <!-- Proposal file path -->
+        {% if proposal.file_path %}
+        <div class="mb-20">
+            <h3 style="font-size: 1rem; color: var(--text-secondary);">File Location</h3>
+            <code style="background: var(--bg-tertiary); padding: 5px 10px; border-radius: 4px; display: inline-block;">
+                {{ proposal.file_path }}
+            </code>
+        </div>
+        {% endif %}
+
+        <!-- Actions -->
+        {% if proposal.status == 'pending' %}
+        <div style="display: flex; gap: 10px; margin-top: 20px;">
+            <button
+                hx-post="/proposals/{{ proposal.id }}/approve"
+                hx-swap="innerHTML"
+                hx-target="body"
+                class="btn"
+                style="background: var(--success);">
+                Approve Proposal
+            </button>
+            <button
+                hx-post="/proposals/{{ proposal.id }}/reject"
+                hx-swap="innerHTML"
+                hx-target="body"
+                class="btn"
+                style="background: var(--accent-dim);">
+                Reject Proposal
+            </button>
+        </div>
+        {% endif %}
+
+        <div class="mt-20">
+            <a href="/proposals" class="btn btn-secondary">← Back to Proposals</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

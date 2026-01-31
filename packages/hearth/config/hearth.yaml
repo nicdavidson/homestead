@@ -1,0 +1,140 @@
+# Hearth Configuration
+# Copy to /opt/hearth/config/hearth.yaml and customize
+
+# Entity home directory (the unnamed entity)
+entity:
+  home: /home/_
+  user: _
+
+# Chat configuration
+chat:
+  main_agent: sonnet  # Main conversational agent: sonnet, opus, or grok
+
+# Agent spawning configuration
+agents:
+  spawnable:  # Agents that can be spawned as subagents
+    - grok    # Cheap workers for parallel research
+    - sonnet  # Mid-tier thinking
+    - opus    # Deep thinking (logs cost warnings)
+
+# API Providers
+models:
+  grok:
+    provider: xai
+    model: grok-3
+    api_key_env: XAI_API_KEY
+    max_tokens: 2048
+    temperature: 0.7
+
+  sonnet:
+    provider: claude-cli  # Uses Claude CLI (no API key needed)
+    model: claude-sonnet-4-5-20250929
+    max_tokens: 4096
+    temperature: 0.7
+    timeout: 120  # CLI timeout in seconds
+
+  opus:
+    provider: claude-cli  # Uses Claude CLI (no API key needed)
+    model: claude-opus-4-5-20251101
+    max_tokens: 8192
+    temperature: 0.8
+    timeout: 300  # CLI timeout in seconds
+
+# Budget limits (USD)
+# Note: Sonnet and Opus use Claude CLI (no per-token cost with Pro subscription)
+# Only Grok (xAI) incurs API costs
+budgets:
+  daily:
+    total: 3.00  # Only Grok now
+    grok: 3.00
+    # Sonnet and Opus removed - CLI has no cost
+
+  alerts:
+    - percent: 50
+      action: log
+    - percent: 80
+      action: notify
+    - percent: 95
+      action: restrict
+    - percent: 100
+      action: pause
+
+# Cost rates per million tokens
+# Note: Only Grok uses API (has costs). Sonnet/Opus use CLI (no cost).
+rates:
+  grok:
+    input: 2.00
+    output: 10.00
+  # Sonnet and Opus removed - CLI models have no per-token cost
+
+# Schedule
+schedule:
+  nightshift:
+    enabled: true
+    start: "22:00"
+    end: "06:00"
+    interval_minutes: 2
+    
+  dayshift:
+    enabled: true
+    start: "06:00"
+    end: "22:00"
+    interval_minutes: 10
+    
+  reflection:
+    interval_hours: 4
+    after_tasks: 10
+    
+  opus_synthesis:
+    enabled: true
+    day: sunday
+    hour: 2  # 2 AM
+    
+  daily_newspaper:
+    enabled: true
+    hour: 6  # 6 AM
+
+# Telegram
+telegram:
+  enabled: true
+  token_env: TELEGRAM_BOT_TOKEN
+  chat_id_env: TELEGRAM_CHAT_ID
+  
+  quiet_hours:
+    enabled: true
+    start: "23:00"
+    end: "07:00"
+    exceptions:
+      - urgent
+      - security
+
+# Web UI
+web:
+  enabled: true
+  host: 127.0.0.1
+  port: 8420
+
+# Logging
+logging:
+  level: INFO
+  file: logs/hearth.log
+  max_size_mb: 50
+
+# Security
+security:
+  # Commands requiring confirmation
+  require_confirmation:
+    - rm -rf
+    - git push
+    - DROP
+    - DELETE FROM
+    - sudo
+    - shutdown
+    - reboot
+    
+  # Paths entity should never touch
+  forbidden_paths:
+    - /etc
+    - /boot
+    - ~/.ssh/id_*
+    - ~/.gnupg

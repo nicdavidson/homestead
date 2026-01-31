@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ title }}{% endblock %} - Hearth</title>
+    
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <style>
+        :root {
+            --bg-primary: #1a1a2e;
+            --bg-secondary: #16213e;
+            --bg-tertiary: #0f3460;
+            --text-primary: #eee;
+            --text-secondary: #aaa;
+            --accent: #e94560;
+            --accent-dim: #c73e54;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --border: #333;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        /* Navigation */
+        nav {
+            background: var(--bg-secondary);
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        nav .logo {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--accent);
+            text-decoration: none;
+        }
+        
+        nav .logo span {
+            color: var(--text-secondary);
+            font-weight: normal;
+            font-size: 1rem;
+        }
+        
+        nav ul {
+            list-style: none;
+            display: flex;
+            gap: 20px;
+        }
+        
+        nav a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        
+        nav a:hover, nav a.active {
+            color: var(--accent);
+        }
+        
+        /* Cards */
+        .card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border);
+        }
+        
+        .card h2 {
+            margin-bottom: 15px;
+            color: var(--accent);
+            font-size: 1.2rem;
+        }
+        
+        /* Forms */
+        input, textarea, select {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 10px 15px;
+            border-radius: 4px;
+            width: 100%;
+            font-size: 1rem;
+        }
+        
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        button, .btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background 0.2s;
+        }
+        
+        button:hover, .btn:hover {
+            background: var(--accent-dim);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-secondary {
+            background: var(--bg-tertiary);
+        }
+        
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            background: var(--bg-tertiary);
+        }
+        
+        .badge.success { background: var(--success); color: black; }
+        .badge.warning { background: var(--warning); color: black; }
+        .badge.accent { background: var(--accent); }
+        
+        /* Grid */
+        .grid {
+            display: grid;
+            gap: 20px;
+        }
+        
+        .grid-2 { grid-template-columns: repeat(2, 1fr); }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        
+        @media (max-width: 768px) {
+            .grid-2, .grid-3 { grid-template-columns: 1fr; }
+        }
+        
+        /* Utilities */
+        .text-secondary { color: var(--text-secondary); }
+        .text-accent { color: var(--accent); }
+        .text-success { color: var(--success); }
+        .text-warning { color: var(--warning); }
+        .mb-10 { margin-bottom: 10px; }
+        .mb-20 { margin-bottom: 20px; }
+        .mt-20 { margin-top: 20px; }
+        
+        /* Loading indicator */
+        .htmx-indicator {
+            display: none;
+        }
+        
+        .htmx-request .htmx-indicator {
+            display: inline-block;
+        }
+        
+        .spinner {
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Chat specific */
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 80px);
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        
+        .message {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        .message.user {
+            background: var(--bg-tertiary);
+            margin-left: 20%;
+        }
+        
+        .message.assistant {
+            background: var(--bg-secondary);
+            margin-right: 20%;
+            border-left: 3px solid var(--accent);
+        }
+        
+        .message-meta {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 10px;
+        }
+        
+        .chat-input {
+            padding: 20px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+        }
+        
+        .chat-input form {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .chat-input input {
+            flex: 1;
+        }
+    </style>
+    
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <nav>
+        <a href="/" class="logo">🔥 Hearth <span>/ {{ name }}</span></a>
+        <ul>
+            <li><a href="/" {% if title == "Chat" %}class="active"{% endif %}>Chat</a></li>
+            <li><a href="/tasks" {% if title == "Tasks" %}class="active"{% endif %}>Tasks</a></li>
+            <li><a href="/skills" {% if title == "Skills" %}class="active"{% endif %}>Skills</a></li>
+            <li><a href="/projects" {% if title == "Projects" %}class="active"{% endif %}>Projects</a></li>
+            <li><a href="/proposals" {% if title == "Proposals" %}class="active"{% endif %}>Proposals</a></li>
+            <li><a href="/status" {% if title == "Status" %}class="active"{% endif %}>Status</a></li>
+            <li><a href="/reflections" {% if title == "Reflections" %}class="active"{% endif %}>Reflections</a></li>
+            <li><a href="/debug" {% if title == "Debug" %}class="active"{% endif %}>Debug</a></li>
+            <li><a href="/config" {% if title == "Configuration" %}class="active"{% endif %}>Config</a></li>
+        </ul>
+    </nav>
+    
+    {% block content %}{% endblock %}
+    
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

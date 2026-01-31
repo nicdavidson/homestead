@@ -1,0 +1,36 @@
+<div class="card">
+    <h3>{{ proposal.title }}</h3>
+    <p class="text-secondary mb-10">{{ proposal.description }}</p>
+
+    <div class="mb-10">
+        <span class="badge {% if proposal.status == 'pending' %}warning{% elif proposal.status == 'approved' %}success{% else %}{% endif %}">
+            {{ proposal.status }}
+        </span>
+        <span class="text-secondary" style="margin-left: 10px; font-size: 0.9rem;">
+            {{ proposal.created_at }}
+        </span>
+    </div>
+
+    <div style="display: flex; gap: 10px; margin-top: 15px;">
+        <a href="/proposals/{{ proposal.id }}" class="btn btn-secondary">View Details</a>
+
+        {% if proposal.status == 'pending' %}
+            <button
+                hx-post="/proposals/{{ proposal.id }}/approve"
+                hx-swap="outerHTML"
+                hx-target="closest .card"
+                class="btn"
+                style="background: var(--success);">
+                Approve
+            </button>
+            <button
+                hx-post="/proposals/{{ proposal.id }}/reject"
+                hx-swap="outerHTML"
+                hx-target="closest .card"
+                class="btn"
+                style="background: var(--accent-dim);">
+                Reject
+            </button>
+        {% endif %}
+    </div>
+</div>

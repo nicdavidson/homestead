@@ -1,0 +1,57 @@
+# Development & Testing (keep locally, don't commit)
+.dev/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# Environment variables (sensitive)
+.env
+*.key
+
+# Database (entity-specific data)
+*.db
+*.db-journal
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# User data (each entity has their own)
+data/
+reflections/
+skills/
+projects/
+pending/
+
+# Test outputs
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+Thumbs.db

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <a href="/skills" class="text-secondary" style="text-decoration: none; display: block; margin-bottom: 20px;">← Back to Skills</a>
+
+        <h2>{{ skill.name }}</h2>
+        <p class="text-secondary mb-20">{{ skill.description }}</p>
+
+        {% if skill.tags %}
+        <div class="mb-20">
+            {% for tag in skill.tags %}
+            <span class="badge" style="margin-right: 5px;">{{ tag }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="card" style="background: var(--bg-tertiary);">
+            <h3 class="mb-10">Content</h3>
+            <pre style="white-space: pre-wrap; font-family: monospace; line-height: 1.6;">{{ skill.content }}</pre>
+        </div>
+
+        {% if skill.examples %}
+        <div class="mt-20">
+            <h3 class="mb-10">Examples</h3>
+            <ul>
+                {% for example in skill.examples %}
+                <li>{{ example }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

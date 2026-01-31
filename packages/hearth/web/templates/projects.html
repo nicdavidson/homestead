@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h2>Projects</h2>
+
+        <!-- Create Project Form -->
+        <details class="mb-20">
+            <summary style="cursor: pointer; padding: 10px; background: var(--bg-tertiary); border-radius: 4px;">
+                ➕ Create New Project
+            </summary>
+            <form hx-post="/projects/create" hx-target="#projects-list" hx-swap="afterbegin" style="margin-top: 15px;">
+                <input name="name" placeholder="Project name" required style="margin-bottom: 10px;">
+                <textarea name="description" placeholder="Project description" rows="2" required style="margin-bottom: 10px;"></textarea>
+                <textarea name="goals" placeholder="Goals (one per line)" rows="4" style="margin-bottom: 10px;"></textarea>
+                <button type="submit">Create Project</button>
+            </form>
+        </details>
+
+        <!-- Filters -->
+        <div style="margin-bottom: 20px;">
+            <a href="/projects" class="btn {% if not current_status %}btn-secondary{% endif %}" style="margin-right: 10px;">All</a>
+            <a href="/projects?status=active" class="btn {% if current_status == 'active' %}btn-secondary{% endif %}" style="margin-right: 10px;">Active</a>
+            <a href="/projects?status=paused" class="btn {% if current_status == 'paused' %}btn-secondary{% endif %}" style="margin-right: 10px;">Paused</a>
+            <a href="/projects?status=completed" class="btn {% if current_status == 'completed' %}btn-secondary{% endif %}">Completed</a>
+        </div>
+
+        <!-- Projects List -->
+        <div id="projects-list" class="grid grid-2">
+            {% if projects %}
+                {% for project in projects %}
+                {% include "partials/project_card.html" %}
+                {% endfor %}
+            {% else %}
+                <p class="text-secondary">No projects found.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

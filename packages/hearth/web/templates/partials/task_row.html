@@ -1,0 +1,28 @@
+<div class="card" style="margin-bottom: 15px;">
+    <div style="display: flex; justify-content: space-between; align-items: start;">
+        <div style="flex: 1;">
+            <h3 style="margin-bottom: 5px;">{{ task.title }}</h3>
+            {% if task.description %}
+            <p class="text-secondary" style="margin-bottom: 10px;">{{ task.description }}</p>
+            {% endif %}
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <span class="badge {{ 'success' if task.status == 'completed' else ('warning' if task.status == 'in_progress' else '') }}">
+                    {{ task.status }}
+                </span>
+                <span class="badge">Priority: {{ task.priority }}</span>
+                <span class="text-secondary" style="font-size: 0.8rem;">{{ task.created_at }}</span>
+            </div>
+        </div>
+        <div style="display: flex; gap: 10px;">
+            {% if task.status == 'pending' %}
+            <button hx-post="/tasks/{{ task.id }}/start" hx-swap="outerHTML" hx-target="closest .card" class="btn">
+                Start
+            </button>
+            {% elif task.status == 'in_progress' %}
+            <button hx-post="/tasks/{{ task.id }}/complete" hx-swap="outerHTML" hx-target="closest .card" class="btn">
+                Complete
+            </button>
+            {% endif %}
+        </div>
+    </div>
+</div>

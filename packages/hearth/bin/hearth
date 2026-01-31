@@ -1,0 +1,36 @@
+#!/bin/bash
+#
+# Hearth - AI Entity Framework
+# Main CLI entry point
+#
+# This script auto-activates the venv and runs the Hearth CLI.
+# Usage: hearth [command] [args...]
+#
+
+set -e
+
+# Resolve script directory (follow symlinks)
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT")"
+HEARTH_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VENV_PYTHON="$HEARTH_ROOT/venv/bin/python3"
+CLI_SCRIPT="$HEARTH_ROOT/cli.py"
+
+# Check if venv exists
+if [ ! -f "$VENV_PYTHON" ]; then
+    echo "Error: Hearth venv not found at $HEARTH_ROOT/venv"
+    echo "Run: cd $HEARTH_ROOT && python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+    exit 1
+fi
+
+# Check if CLI exists
+if [ ! -f "$CLI_SCRIPT" ]; then
+    echo "Error: Hearth CLI not found at $CLI_SCRIPT"
+    exit 1
+fi
+
+# Add Hearth root to PYTHONPATH so imports work
+export PYTHONPATH="$HEARTH_ROOT:$PYTHONPATH"
+
+# Run CLI with venv Python, passing all arguments
+exec "$VENV_PYTHON" "$CLI_SCRIPT" "$@"

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="chat-container">
+    <div class="chat-messages" id="messages">
+        <div class="message assistant">
+            <p>Hello! I'm {{ name }}. How can I help?</p>
+            <div class="message-meta">Ready</div>
+        </div>
+    </div>
+    
+    <div class="chat-input">
+        <form hx-post="/chat" 
+              hx-target="#messages" 
+              hx-swap="beforeend"
+              hx-on::after-request="this.reset(); document.getElementById('messages').scrollTop = document.getElementById('messages').scrollHeight;">
+            <input type="text" 
+                   name="message" 
+                   placeholder="Type a message..." 
+                   autocomplete="off"
+                   autofocus>
+            <button type="submit">
+                Send
+                <span class="htmx-indicator spinner">⏳</span>
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Auto-scroll on new messages
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'messages') {
+            event.detail.target.scrollTop = event.detail.target.scrollHeight;
+        }
+    });
+</script>
+{% endblock %}

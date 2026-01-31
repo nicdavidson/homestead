@@ -1,0 +1,12 @@
+<div class="card">
+    <h3 style="margin-bottom: 10px;">{{ skill.name }}</h3>
+    <p class="text-secondary" style="margin-bottom: 15px;">{{ skill.description }}</p>
+    {% if skill.tags %}
+    <div style="margin-bottom: 10px;">
+        {% for tag in skill.tags %}
+        <span class="badge" style="margin-right: 5px;">{{ tag }}</span>
+        {% endfor %}
+    </div>
+    {% endif %}
+    <a href="/skills/{{ skill.name }}" class="btn btn-secondary">View Details</a>
+</div>

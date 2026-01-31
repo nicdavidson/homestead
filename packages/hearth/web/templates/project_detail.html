@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <a href="/projects" class="text-secondary" style="text-decoration: none; display: block; margin-bottom: 20px;">← Back to Projects</a>
+
+        <h2>{{ project.name }}</h2>
+        <span class="badge {{ 'success' if project.status == 'completed' else ('warning' if project.status == 'active' else '') }}" style="margin-bottom: 15px; display: inline-block;">
+            {{ project.status }}
+        </span>
+
+        <p class="text-secondary mb-20">{{ project.description }}</p>
+
+        {% if project.goals %}
+        <div class="card" style="background: var(--bg-tertiary); margin-bottom: 20px;">
+            <h3 class="mb-10">Goals</h3>
+            <ul style="padding-left: 20px;">
+                {% for goal in project.goals %}
+                <li style="margin-bottom: 5px;">{{ goal }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        {% if project.notes %}
+        <div class="card" style="background: var(--bg-tertiary); margin-bottom: 20px;">
+            <h3 class="mb-10">Notes</h3>
+            <pre style="white-space: pre-wrap; font-family: inherit;">{{ project.notes }}</pre>
+        </div>
+        {% endif %}
+
+        <div class="grid grid-2">
+            <div>
+                <span class="text-secondary">Created:</span> {{ project.created_at }}
+            </div>
+            {% if project.updated_at %}
+            <div>
+                <span class="text-secondary">Updated:</span> {{ project.updated_at }}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

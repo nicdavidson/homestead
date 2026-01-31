@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <a href="/reflections" class="text-accent mb-20" style="display: block;">← Back to Reflections</a>
+    
+    <div class="card">
+        <h1>{{ title }}</h1>
+        <div style="white-space: pre-wrap; margin-top: 20px;">{{ content }}</div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h2>Self-Improvement Proposals</h2>
+        <p class="text-secondary mb-20">Review and approve code improvements proposed by the entity.</p>
+
+        <!-- Filters -->
+        <div style="margin-bottom: 20px;">
+            <a href="/proposals?status=pending" class="btn {% if current_status == 'pending' %}btn-secondary{% endif %}" style="margin-right: 10px;">Pending</a>
+            <a href="/proposals?status=approved" class="btn {% if current_status == 'approved' %}btn-secondary{% endif %}" style="margin-right: 10px;">Approved</a>
+            <a href="/proposals?status=rejected" class="btn {% if current_status == 'rejected' %}btn-secondary{% endif %}">Rejected</a>
+        </div>
+
+        <!-- Proposals List -->
+        <div id="proposals-list">
+            {% if proposals %}
+                {% for proposal in proposals %}
+                {% include "partials/proposal_card.html" %}
+                {% endfor %}
+            {% else %}
+                <p class="text-secondary">No {{ current_status }} proposals found.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

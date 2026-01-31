@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mb-20">System Status</h1>
+    
+    <div class="grid grid-2">
+        <div class="card">
+            <h2>🔥 Entity</h2>
+            <p><strong>Name:</strong> {{ name }}{% if not is_named %} <span class="badge">unnamed</span>{% endif %}</p>
+            <p><strong>Status:</strong> <span class="text-success">Running</span></p>
+        </div>
+        
+        <div class="card">
+            <h2>💰 Budget (Today)</h2>
+            <p>
+                <strong>Spent:</strong> ${{ "%.2f"|format(budget.daily_spent) }} / ${{ "%.2f"|format(budget.daily_budget) }}
+                <span class="badge {% if budget.warning %}warning{% else %}success{% endif %}">
+                    {{ "%.0f"|format(budget.percent_used) }}%
+                </span>
+            </p>
+            <p><strong>Grok:</strong> ${{ "%.2f"|format(budget.grok_spent) }} / ${{ "%.2f"|format(budget.grok_budget) }}</p>
+            <p><strong>Sonnet:</strong> ${{ "%.2f"|format(budget.sonnet_spent) }} / ${{ "%.2f"|format(budget.sonnet_budget) }}</p>
+            <p><strong>Opus (weekly):</strong> ${{ "%.2f"|format(budget.opus_spent) }} / ${{ "%.2f"|format(budget.opus_budget) }}</p>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>📋 Tasks</h2>
+        <div class="grid grid-3">
+            <div>
+                <p class="text-secondary">Pending</p>
+                <p style="font-size: 2rem;">{{ tasks.get('pending', 0) }}</p>
+            </div>
+            <div>
+                <p class="text-secondary">Completed Today</p>
+                <p style="font-size: 2rem; color: var(--success);">{{ tasks.get('completed_today', 0) }}</p>
+            </div>
+            <div>
+                <p class="text-secondary">Blocked</p>
+                <p style="font-size: 2rem; color: var(--warning);">{{ tasks.get('blocked', 0) }}</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>🔄 Actions</h2>
+        <div style="display: flex; gap: 10px;">
+            <button hx-post="/reflect" 
+                    hx-target="#action-result" 
+                    hx-swap="innerHTML">
+                Trigger Reflection
+                <span class="htmx-indicator">⏳</span>
+            </button>
+            <button class="btn-secondary" onclick="location.href='/reflections'">
+                View Reflections
+            </button>
+        </div>
+        <div id="action-result" class="mt-20"></div>
+    </div>
+</div>
+{% endblock %}

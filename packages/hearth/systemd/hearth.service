@@ -1,0 +1,38 @@
+[Unit]
+Description=Hearth - AI Entity Infrastructure (Unified Service)
+After=network.target
+
+[Service]
+Type=simple
+User=nic
+Group=nic
+WorkingDirectory=/opt/hearth
+
+# Environment
+Environment="PATH=/opt/hearth/venv/bin:/usr/bin:/bin"
+Environment="ENTITY_HOME=/home/nic/.hearth"
+Environment="ENTITY_USER=nic"
+
+# Main process - runs everything (Nightshift + REST API + Web UI)
+ExecStart=/opt/hearth/venv/bin/python /opt/hearth/main.py serve --host 0.0.0.0 --port 8420
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hearth
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/nic/.hearth
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

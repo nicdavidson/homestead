@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h2>Skills Library</h2>
+
+        <!-- Search -->
+        <form method="get" class="mb-20">
+            <div style="display: flex; gap: 10px;">
+                <input name="query" placeholder="Search skills..." value="{{ query or '' }}" style="flex: 1;">
+                <button type="submit">Search</button>
+                {% if query %}
+                <a href="/skills" class="btn btn-secondary">Clear</a>
+                {% endif %}
+            </div>
+        </form>
+
+        <!-- Create Skill Form -->
+        <details class="mb-20">
+            <summary style="cursor: pointer; padding: 10px; background: var(--bg-tertiary); border-radius: 4px;">
+                ➕ Create New Skill
+            </summary>
+            <form hx-post="/skills/create" hx-target="#skills-list" hx-swap="afterbegin" style="margin-top: 15px;">
+                <input name="name" placeholder="Skill name" required style="margin-bottom: 10px;">
+                <input name="description" placeholder="Brief description" required style="margin-bottom: 10px;">
+                <textarea name="content" placeholder="Skill content (markdown supported)" rows="6" required style="margin-bottom: 10px;"></textarea>
+                <input name="tags" placeholder="Tags (comma-separated)" style="margin-bottom: 10px;">
+                <button type="submit">Create Skill</button>
+            </form>
+        </details>
+
+        <!-- Skills List -->
+        <div id="skills-list" class="grid grid-2">
+            {% if skills %}
+                {% for skill in skills %}
+                {% include "partials/skill_card.html" %}
+                {% endfor %}
+            {% else %}
+                <p class="text-secondary">No skills found.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

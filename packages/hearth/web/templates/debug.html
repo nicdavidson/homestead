@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h2>Debug & Introspection</h2>
+        <p class="text-secondary mb-20">System state, configuration, and recent activity.</p>
+    </div>
+
+    <!-- System Information -->
+    <div class="card">
+        <h2>System Information</h2>
+        <div class="grid grid-2">
+            <div>
+                <p class="text-secondary">Entity Home</p>
+                <code style="background: var(--bg-tertiary); padding: 5px 10px; border-radius: 4px; display: block; overflow-x: auto;">
+                    {{ debug_info.entity_home }}
+                </code>
+            </div>
+            <div>
+                <p class="text-secondary">Entity User</p>
+                <code style="background: var(--bg-tertiary); padding: 5px 10px; border-radius: 4px; display: block;">
+                    {{ debug_info.entity_user }}
+                </code>
+            </div>
+            <div>
+                <p class="text-secondary">Database</p>
+                <code style="background: var(--bg-tertiary); padding: 5px 10px; border-radius: 4px; display: block; overflow-x: auto;">
+                    {{ debug_info.database }}
+                </code>
+            </div>
+            <div>
+                <p class="text-secondary">Config File</p>
+                <code style="background: var(--bg-tertiary); padding: 5px 10px; border-radius: 4px; display: block; overflow-x: auto;">
+                    {{ debug_info.config_file }}
+                </code>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="grid grid-3">
+        <div class="card">
+            <h3 style="font-size: 1rem; color: var(--text-secondary); margin-bottom: 10px;">Providers</h3>
+            <div style="font-size: 2rem; font-weight: bold; color: var(--accent);">
+                {{ debug_info.providers|length }}
+            </div>
+            <div class="text-secondary" style="font-size: 0.9rem;">
+                {% for provider in debug_info.providers %}
+                    <span class="badge" style="margin: 2px;">{{ provider }}</span>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="font-size: 1rem; color: var(--text-secondary); margin-bottom: 10px;">Total Tasks</h3>
+            <div style="font-size: 2rem; font-weight: bold; color: var(--accent);">
+                {{ debug_info.tasks_total }}
+            </div>
+        </div>
+
+        <div class="card">
+            <h3 style="font-size: 1rem; color: var(--text-secondary); margin-bottom: 10px;">Running Subagents</h3>
+            <div style="font-size: 2rem; font-weight: bold; color: var(--success);">
+                {{ debug_info.subagents_running }}
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Tasks -->
+    <div class="card">
+        <h2>Recent Tasks</h2>
+        {% if recent_tasks %}
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border);">
+                            <th style="padding: 10px; text-align: left;">ID</th>
+                            <th style="padding: 10px; text-align: left;">Title</th>
+                            <th style="padding: 10px; text-align: left;">Status</th>
+                            <th style="padding: 10px; text-align: left;">Priority</th>
+                            <th style="padding: 10px; text-align: left;">Source</th>
+                            <th style="padding: 10px; text-align: left;">Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for task in recent_tasks %}
+                        <tr style="border-bottom: 1px solid var(--border);">
+                            <td style="padding: 10px;">
+                                <code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 3px;">
+                                    {{ task.id }}
+                                </code>
+                            </td>
+                            <td style="padding: 10px;">{{ task.title }}</td>
+                            <td style="padding: 10px;">
+                                <span class="badge {% if task.status == 'completed' %}success{% elif task.status == 'in_progress' %}warning{% endif %}">
+                                    {{ task.status }}
+                                </span>
+                            </td>
+                            <td style="padding: 10px;">
+                                <span class="badge">P{{ task.priority }}</span>
+                            </td>
+                            <td style="padding: 10px;">
+                                <span class="text-secondary">{{ task.source or 'unknown' }}</span>
+                            </td>
+                            <td style="padding: 10px;">
+                                <span class="text-secondary" style="font-size: 0.9rem;">{{ task.created_at }}</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="text-secondary">No recent tasks.</p>
+        {% endif %}
+    </div>
+
+    <!-- Active Subagents -->
+    <div class="card">
+        <h2>Active Subagents</h2>
+        {% if subagents %}
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--border);">
+                            <th style="padding: 10px; text-align: left;">Run ID</th>
+                            <th style="padding: 10px; text-align: left;">Label</th>
+                            <th style="padding: 10px; text-align: left;">Status</th>
+                            <th style="padding: 10px; text-align: left;">Agent Type</th>
+                            <th style="padding: 10px; text-align: left;">Started</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for agent in subagents %}
+                        <tr style="border-bottom: 1px solid var(--border);">
+                            <td style="padding: 10px;">
+                                <code style="background: var(--bg-tertiary); padding: 2px 6px; border-radius: 3px;">
+                                    {{ agent.run_id }}
+                                </code>
+                            </td>
+                            <td style="padding: 10px;">{{ agent.label or '-' }}</td>
+                            <td style="padding: 10px;">
+                                <span class="badge {% if agent.status == 'running' %}warning{% elif agent.status == 'completed' %}success{% endif %}">
+                                    {{ agent.status }}
+                                </span>
+                            </td>
+                            <td style="padding: 10px;">
+                                <span class="badge">{{ agent.agent_type }}</span>
+                            </td>
+                            <td style="padding: 10px;">
+                                <span class="text-secondary" style="font-size: 0.9rem;">{{ agent.started_at }}</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p class="text-secondary">No active subagents.</p>
+        {% endif %}
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="card">
+        <h2>Quick Actions</h2>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <a href="/api/status" target="_blank" class="btn btn-secondary">View API Status</a>
+            <a href="/api/costs" target="_blank" class="btn btn-secondary">View Costs</a>
+            <a href="/status" class="btn btn-secondary">System Status</a>
+            <a href="/config" class="btn btn-secondary">Configuration</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

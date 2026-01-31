@@ -1,0 +1,36 @@
+#!/bin/bash
+#
+# Hearth Nightshift - Cron Entry Point
+#
+# Add to crontab:
+# */5 * * * * /opt/hearth/bin/nightshift-cron >> /var/log/hearth-nightshift.log 2>&1
+#
+# Or for specific entity:
+# */5 * * * * ENTITY_HOME=/home/myentity /opt/hearth/bin/nightshift-cron >> /home/myentity/logs/nightshift.log 2>&1
+#
+
+set -e
+
+# Resolve script directory (follow symlinks)
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT")"
+HEARTH_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VENV_PYTHON="$HEARTH_ROOT/venv/bin/python3"
+
+# Check if venv exists
+if [ ! -f "$VENV_PYTHON" ]; then
+    echo "Error: Hearth venv not found at $HEARTH_ROOT/venv"
+    exit 1
+fi
+
+# Add Hearth root to PYTHONPATH
+export PYTHONPATH="$HEARTH_ROOT:$PYTHONPATH"
+
+# Run nightshift cycle
+"$VENV_PYTHON" -c "
+from core.nightshift import run_nightshift_cycle
+import json
+
+result = run_nightshift_cycle()
+print(json.dumps(result, indent=2))
+"

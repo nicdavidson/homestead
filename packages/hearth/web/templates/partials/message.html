@@ -1,0 +1,11 @@
+<div class="message user">
+    <p>{{ user_message }}</p>
+</div>
+
+<div class="message assistant">
+    <p>{{ assistant_message }}</p>
+    <div class="message-meta">
+        {% if model %}{{ model }}{% endif %}
+        {% if cost %} · {{ cost }}{% endif %}
+    </div>
+</div>

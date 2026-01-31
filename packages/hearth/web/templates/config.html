@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mb-20">Configuration</h1>
+    
+    <div class="card">
+        <h2>💰 Budget Limits</h2>
+        <form hx-post="/config" hx-target="#save-result" hx-swap="innerHTML">
+            <div class="grid grid-2 mb-20">
+                <div>
+                    <label class="text-secondary mb-10" style="display: block;">Daily Total ($)</label>
+                    <input type="number" name="daily_total" step="0.01" value="{{ config.budget.daily_total }}">
+                </div>
+                <div>
+                    <label class="text-secondary mb-10" style="display: block;">Daily Grok ($)</label>
+                    <input type="number" name="daily_grok" step="0.01" value="{{ config.budget.daily_grok }}">
+                </div>
+                <div>
+                    <label class="text-secondary mb-10" style="display: block;">Daily Sonnet ($)</label>
+                    <input type="number" name="daily_sonnet" step="0.01" value="{{ config.budget.daily_sonnet }}">
+                </div>
+                <div>
+                    <label class="text-secondary mb-10" style="display: block;">Weekly Opus ($)</label>
+                    <input type="number" name="weekly_opus" step="0.01" value="{{ config.budget.weekly_opus }}">
+                </div>
+            </div>
+            <button type="submit">Save Configuration</button>
+            <div id="save-result" style="display: inline-block; margin-left: 10px;"></div>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h2>⏰ Schedule</h2>
+        <p><strong>Reflection Interval:</strong> Every {{ config.schedule.reflection_hours }} hours</p>
+        <p><strong>Quiet Hours:</strong> {{ config.schedule.quiet_start }} - {{ config.schedule.quiet_end }}</p>
+        <p><strong>Newspaper:</strong> {{ config.schedule.newspaper_time }}</p>
+        <p><strong>Weekly Synthesis:</strong> {{ config.schedule.opus_day }} {{ config.schedule.opus_time }}</p>
+        <p class="text-secondary mt-20">Edit config file directly for schedule changes.</p>
+    </div>
+    
+    <div class="card">
+        <h2>🔑 API Keys</h2>
+        <p><strong>Anthropic:</strong> {% if config.anthropic_key %}✅ Configured{% else %}❌ Missing{% endif %}</p>
+        <p><strong>xAI (Grok):</strong> {% if config.xai_key %}✅ Configured{% else %}❌ Missing{% endif %}</p>
+        <p><strong>Telegram:</strong> {% if config.telegram_token %}✅ Configured{% else %}❌ Missing{% endif %}</p>
+        <p class="text-secondary mt-20">Edit secrets files directly for API key changes.</p>
+    </div>
+</div>
+{% endblock %}

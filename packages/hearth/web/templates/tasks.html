@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card">
+        <h2>Tasks</h2>
+
+        <!-- Stats -->
+        <div class="grid grid-3 mb-20">
+            <div class="card" style="background: var(--bg-tertiary);">
+                <div class="text-secondary">Pending</div>
+                <div style="font-size: 2rem;">{{ stats.by_status.pending or 0 }}</div>
+            </div>
+            <div class="card" style="background: var(--bg-tertiary);">
+                <div class="text-secondary">In Progress</div>
+                <div style="font-size: 2rem; color: var(--warning);">{{ stats.by_status.in_progress or 0 }}</div>
+            </div>
+            <div class="card" style="background: var(--bg-tertiary);">
+                <div class="text-secondary">Completed</div>
+                <div style="font-size: 2rem; color: var(--success);">{{ stats.by_status.completed or 0 }}</div>
+            </div>
+        </div>
+
+        <!-- Create Task Form -->
+        <form hx-post="/tasks/create" hx-target="#task-list" hx-swap="afterbegin" class="mb-20">
+            <input name="title" placeholder="Task title" required style="margin-bottom: 10px;">
+            <textarea name="description" placeholder="Description (optional)" rows="2" style="margin-bottom: 10px;"></textarea>
+            <div style="display: flex; gap: 10px;">
+                <select name="priority" style="width: 150px;">
+                    <option value="1">Low Priority</option>
+                    <option value="2" selected>Medium Priority</option>
+                    <option value="3">High Priority</option>
+                </select>
+                <button type="submit">Create Task</button>
+            </div>
+        </form>
+
+        <!-- Filters -->
+        <div style="margin-bottom: 20px;">
+            <a href="/tasks" class="btn {% if not current_status %}btn-secondary{% endif %}" style="margin-right: 10px;">All</a>
+            <a href="/tasks?status=pending" class="btn {% if current_status == 'pending' %}btn-secondary{% endif %}" style="margin-right: 10px;">Pending</a>
+            <a href="/tasks?status=in_progress" class="btn {% if current_status == 'in_progress' %}btn-secondary{% endif %}" style="margin-right: 10px;">In Progress</a>
+            <a href="/tasks?status=completed" class="btn {% if current_status == 'completed' %}btn-secondary{% endif %}">Completed</a>
+        </div>
+
+        <!-- Task List -->
+        <div id="task-list">
+            {% if tasks %}
+                {% for task in tasks %}
+                {% include "partials/task_row.html" %}
+                {% endfor %}
+            {% else %}
+                <p class="text-secondary">No tasks found.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

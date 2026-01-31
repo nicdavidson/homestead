@@ -1,0 +1,35 @@
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: start;">
+        <div style="flex: 1;">
+            <h3 style="margin-bottom: 5px;">{{ project.name }}</h3>
+            <p class="text-secondary" style="margin-bottom: 10px;">{{ project.description }}</p>
+
+            <span class="badge {{ 'success' if project.status == 'completed' else ('warning' if project.status == 'active' else '') }}" style="margin-bottom: 10px;">
+                {{ project.status }}
+            </span>
+
+            {% if project.goals %}
+            <div style="margin-top: 10px;">
+                <strong class="text-secondary" style="font-size: 0.9rem;">Goals:</strong>
+                <ul style="margin-top: 5px; padding-left: 20px;">
+                    {% for goal in project.goals %}
+                    <li class="text-secondary" style="font-size: 0.9rem;">{{ goal }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+            {% if project.status == 'active' %}
+            <button hx-post="/projects/{{ project.id }}/pause" hx-swap="outerHTML" hx-target="closest .card" class="btn btn-secondary">
+                Pause
+            </button>
+            {% elif project.status == 'paused' %}
+            <button hx-post="/projects/{{ project.id }}/resume" hx-swap="outerHTML" hx-target="closest .card" class="btn">
+                Resume
+            </button>
+            {% endif %}
+            <a href="/projects/{{ project.id }}" class="btn btn-secondary">View</a>
+        </div>
+    </div>
+</div>
