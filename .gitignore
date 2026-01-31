@@ -1,0 +1,47 @@
+# Python
+.env
+*.pyc
+__pycache__/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Data / databases
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Node
+node_modules/
+.next/
+out/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Homestead — personal lore files (only .example templates are committed)
+lore/*.md
+!lore/*.md.example
+~/.homestead/
+
+# Config overrides (runtime, per-instance)
+config_overrides.json
+config_backups/
+
+# MCP config (contains absolute paths, per-instance)
+manor/mcp-config.json
+
+# Logs
+*.log
+
+# Manor — build artifacts
+manor/package-lock.json

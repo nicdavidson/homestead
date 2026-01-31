@@ -1,0 +1,12 @@
+[project]
+name = "almanac"
+version = "0.1.0"
+description = "Job scheduling and cron for homestead"
+requires-python = ">=3.11"
+
+[project.scripts]
+almanac = "almanac.main:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"

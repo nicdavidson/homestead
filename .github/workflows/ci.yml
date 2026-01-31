@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check packages/ tests/
+      - name: Format check
+        run: ruff format --check packages/ tests/
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install pytest aiogram python-dotenv httpx
+      - name: Run tests
+        run: |
+          PYTHONPATH=packages/common:packages/herald:packages/steward:packages/almanac \
+          pytest tests/ -v --tb=short
+
+  manor-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        working-directory: manor
+        run: npm ci
+      - name: Type check
+        working-directory: manor
+        run: npx tsc --noEmit
+      - name: Lint
+        working-directory: manor
+        run: npm run lint
+
+  manor-build:
+    runs-on: ubuntu-latest
+    needs: manor-lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        working-directory: manor
+        run: npm ci
+      - name: Build
+        working-directory: manor
+        run: npm run build

@@ -1,0 +1,20 @@
+[Unit]
+Description=Herald — Telegram Claude Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=milo
+WorkingDirectory=/home/milo/projects/personal/homestead/packages/herald
+ExecStart=/home/milo/projects/personal/homestead/packages/herald/.venv/bin/python -m herald.main
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/milo/projects/personal/homestead/packages/herald/.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=herald
+
+[Install]
+WantedBy=multi-user.target

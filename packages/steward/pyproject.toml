@@ -1,0 +1,9 @@
+[project]
+name = "steward"
+version = "0.1.0"
+description = "Task management for homestead"
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"

@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""hctl — Homestead Control CLI
+
+Usage:
+    hctl status              Show system status
+    hctl logs [hours]        Show recent logs
+    hctl tasks [status]      List tasks
+    hctl task <title>        Create a task
+    hctl sessions            List all sessions
+    hctl outbox [send]       Show/send outbox messages
+    hctl skills              List skills
+    hctl scratchpad          List scratchpad notes
+    hctl seed                Seed sample data
+"""
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+
+HOMESTEAD_DIR = Path(os.environ.get("HOMESTEAD_DATA_DIR", "~/.homestead")).expanduser()
+HERALD_DATA = Path(os.environ.get("HERALD_DATA_DIR", Path(__file__).parent.parent / "packages" / "herald" / "data"))
+
+
+def get_conn(db_path: Path) -> sqlite3.Connection:
+    if not db_path.exists():
+        print(f"Database not found: {db_path}", file=sys.stderr)
+        sys.exit(1)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def fmt_time(ts: float) -> str:
+    if not ts:
+        return "—"
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def cmd_status(args):
+    """Show system status."""
+    print("=== Homestead Status ===\n")
+
+    # Check databases
+    dbs = {
+        "watchtower": HOMESTEAD_DIR / "watchtower.db",
+        "outbox": HOMESTEAD_DIR / "outbox.db",
+        "tasks": HOMESTEAD_DIR / "steward" / "tasks.db",
+        "jobs": HOMESTEAD_DIR / "almanac" / "jobs.db",
+        "sessions": HERALD_DATA / "sessions.db",
+    }
+
+    for name, path in dbs.items():
+        status = "OK" if path.exists() else "missing"
+        size = f"({path.stat().st_size // 1024}KB)" if path.exists() else ""
+        print(f"  {name:12s} {status:8s} {size}")
+
+    # Check directories
+    print()
+    dirs = {
+        "skills": HOMESTEAD_DIR / "skills",
+        "scratchpad": HOMESTEAD_DIR / "scratchpad",
+    }
+    for name, path in dirs.items():
+        if path.is_dir():
+            count = len(list(path.glob("*.md")))
+            print(f"  {name:12s} {count} files")
+        else:
+            print(f"  {name:12s} not created")
+
+    # Log summary
+    wt_path = HOMESTEAD_DIR / "watchtower.db"
+    if wt_path.exists():
+        conn = get_conn(wt_path)
+        since = time.time() - 24 * 3600
+        rows = conn.execute(
+            "SELECT level, COUNT(*) as cnt FROM logs WHERE timestamp >= ? GROUP BY level",
+            (since,)
+        ).fetchall()
+        if rows:
+            print(f"\n  Logs (24h):")
+            for r in rows:
+                print(f"    {r['level']:8s} {r['cnt']}")
+        conn.close()
+
+
+def cmd_logs(args):
+    """Show recent logs."""
+    hours = args.hours or 24
+    conn = get_conn(HOMESTEAD_DIR / "watchtower.db")
+    since = time.time() - hours * 3600
+
+    query = "SELECT * FROM logs WHERE timestamp >= ?"
+    params = [since]
+
+    if args.level:
+        query += " AND level = ?"
+        params.append(args.level.upper())
+    if args.source:
+        query += " AND source LIKE ?"
+        params.append(f"{args.source}%")
+
+    query += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(args.limit or 50)
+
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    for r in rows:
+        ts = fmt_time(r["timestamp"])
+        level = r["level"]
+        colors = {"ERROR": "\033[31m", "WARNING": "\033[33m", "INFO": "\033[32m", "DEBUG": "\033[90m"}
+        reset = "\033[0m"
+        color = colors.get(level, "")
+        print(f"{ts} {color}{level:7s}{reset} [{r['source']}] {r['message']}")
+
+
+def cmd_tasks(args):
+    """List tasks."""
+    db_path = HOMESTEAD_DIR / "steward" / "tasks.db"
+    conn = get_conn(db_path)
+
+    query = "SELECT * FROM tasks"
+    params = []
+    if args.status:
+        query += " WHERE status = ?"
+        params.append(args.status)
+    query += " ORDER BY created_at DESC LIMIT 20"
+
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    if not rows:
+        print("No tasks found.")
+        return
+
+    icons = {"pending": "\u23f3", "in_progress": "\U0001f504", "blocked": "\U0001f6ab", "completed": "\u2705", "cancelled": "\u274c"}
+    for r in rows:
+        icon = icons.get(r["status"], "\u2022")
+        pri = r["priority"][0].upper()
+        print(f"  {icon} [{pri}] {r['title']:40s} ({r['status']})")
+
+
+def cmd_task_create(args):
+    """Create a task."""
+    import uuid
+    db_path = HOMESTEAD_DIR / "steward" / "tasks.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("""CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending', priority TEXT NOT NULL DEFAULT 'normal',
+        assignee TEXT DEFAULT 'auto', blockers_json TEXT DEFAULT '[]',
+        depends_on_json TEXT DEFAULT '[]', created_at REAL NOT NULL,
+        updated_at REAL NOT NULL, completed_at REAL, tags_json TEXT DEFAULT '[]',
+        notes_json TEXT DEFAULT '[]', source TEXT DEFAULT ''
+    )""")
+    now = time.time()
+    task_id = str(uuid.uuid4())
+    title = " ".join(args.title)
+    conn.execute(
+        "INSERT INTO tasks (id, title, status, priority, created_at, updated_at, source) VALUES (?, ?, 'pending', ?, ?, ?, 'hctl')",
+        (task_id, title, args.priority or "normal", now, now)
+    )
+    conn.commit()
+    conn.close()
+    print(f"Created: {title} ({task_id[:8]})")
+
+
+def cmd_sessions(args):
+    """List sessions."""
+    conn = get_conn(HERALD_DATA / "sessions.db")
+    rows = conn.execute("SELECT * FROM sessions ORDER BY last_active_at DESC").fetchall()
+    conn.close()
+
+    for r in rows:
+        active = "\u2192" if r["is_active"] else " "
+        print(f"  {active} {r['name']:15s} model={r['model']:8s} msgs={r['message_count']:3d} last={fmt_time(r['last_active_at'])}")
+
+
+def cmd_outbox(args):
+    """Show outbox messages."""
+    conn = get_conn(HOMESTEAD_DIR / "outbox.db")
+    rows = conn.execute("SELECT * FROM outbox ORDER BY created_at DESC LIMIT 20").fetchall()
+    conn.close()
+
+    for r in rows:
+        ts = fmt_time(r["created_at"])
+        status = r["status"]
+        print(f"  [{status:7s}] {ts} {r['agent_name']:12s} {r['message'][:60]}")
+
+
+def cmd_skills(args):
+    """List skills."""
+    skills_dir = HOMESTEAD_DIR / "skills"
+    if not skills_dir.is_dir():
+        print("No skills directory.")
+        return
+    for p in sorted(skills_dir.glob("*.md")):
+        size = p.stat().st_size
+        print(f"  {p.stem:30s} ({size:,d} bytes)")
+
+
+def cmd_scratchpad(args):
+    """List scratchpad notes."""
+    pad_dir = HOMESTEAD_DIR / "scratchpad"
+    if not pad_dir.is_dir():
+        print("No scratchpad directory.")
+        return
+    for p in sorted(pad_dir.glob("*.md")):
+        size = p.stat().st_size
+        print(f"  {p.stem:30s} ({size:,d} bytes)")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Homestead Control CLI")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("status", help="Show system status")
+
+    logs_p = sub.add_parser("logs", help="Show recent logs")
+    logs_p.add_argument("hours", type=float, nargs="?", default=24)
+    logs_p.add_argument("--level", "-l")
+    logs_p.add_argument("--source", "-s")
+    logs_p.add_argument("--limit", "-n", type=int, default=50)
+
+    tasks_p = sub.add_parser("tasks", help="List tasks")
+    tasks_p.add_argument("status", nargs="?")
+
+    task_p = sub.add_parser("task", help="Create a task")
+    task_p.add_argument("title", nargs="+")
+    task_p.add_argument("--priority", "-p", default="normal")
+
+    sub.add_parser("sessions", help="List sessions")
+    sub.add_parser("outbox", help="Show outbox")
+    sub.add_parser("skills", help="List skills")
+    sub.add_parser("scratchpad", help="List scratchpad")
+
+    args = parser.parse_args()
+
+    commands = {
+        "status": cmd_status,
+        "logs": cmd_logs,
+        "tasks": cmd_tasks,
+        "task": cmd_task_create,
+        "sessions": cmd_sessions,
+        "outbox": cmd_outbox,
+        "skills": cmd_skills,
+        "scratchpad": cmd_scratchpad,
+    }
+
+    if args.command in commands:
+        commands[args.command](args)
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()

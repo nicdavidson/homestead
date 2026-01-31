@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "homestead": {
+      "command": ".venv/bin/python3",
+      "args": ["-m", "mcp_homestead.server"],
+      "env": {
+        "MANOR_API_URL": "http://localhost:8700"
+      }
+    }
+  }
+}

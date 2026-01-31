@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #171717;
+  --color-surface-hover: #262626;
+  --color-surface-active: #303030;
+  --color-border: #262626;
+  --color-border-subtle: #1f1f1f;
+}
+
+/*
+ * Manor — Homestead Dashboard
+ * Warm, earthy dark theme
+ */
+
+/* Base */
+html {
+  color-scheme: dark;
+}
+
+body {
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Selection */
+::selection {
+  background-color: rgba(245, 158, 11, 0.25);
+  color: #fef3c7;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #363636;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #525252;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #363636 transparent;
+}
+
+/* Smooth transitions on interactive elements */
+button,
+a,
+input,
+textarea,
+select {
+  transition: color 150ms ease, background-color 150ms ease,
+    border-color 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+}
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+/* Reduce motion for those who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
