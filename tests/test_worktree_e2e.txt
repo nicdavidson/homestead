@@ -1,2 +1,0 @@
-# Test file for proposal e2e test
-# Modified by proposal system
