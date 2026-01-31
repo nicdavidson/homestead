@@ -109,6 +109,29 @@ async def run() -> None:
     # Start outbox poller (delivers messages from other packages)
     asyncio.create_task(poll_outbox(bot, config))
 
+    # Register commands for Telegram autocomplete
+    from aiogram.types import BotCommand
+    await bot.set_my_commands([
+        BotCommand(command="new", description="Fresh conversation"),
+        BotCommand(command="status", description="Session info + usage"),
+        BotCommand(command="model", description="Show/change model"),
+        BotCommand(command="session", description="Switch/create session"),
+        BotCommand(command="sessions", description="List all sessions"),
+        BotCommand(command="cancel", description="Cancel current request"),
+        BotCommand(command="health", description="System health overview"),
+        BotCommand(command="alerts", description="View/manage alerts"),
+        BotCommand(command="proposals", description="Review code proposals"),
+        BotCommand(command="jobs", description="Manage scheduled jobs"),
+        BotCommand(command="logs", description="Log summary"),
+        BotCommand(command="search", description="Search memory"),
+        BotCommand(command="journal", description="Write/list journal"),
+        BotCommand(command="skills", description="List/read skills"),
+        BotCommand(command="task", description="Manage tasks"),
+        BotCommand(command="scratchpad", description="Read/write notes"),
+        BotCommand(command="help", description="Show all commands"),
+    ])
+    log.info("Telegram command autocomplete registered")
+
     try:
         await dp.start_polling(bot)
     finally:

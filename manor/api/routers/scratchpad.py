@@ -49,7 +49,7 @@ def list_scratchpad():
     for p in sorted(base.glob("*.md")):
         stat = p.stat()
         results.append({
-            "filename": p.name,
+            "name": p.name,
             "size": stat.st_size,
             "modified": stat.st_mtime,
         })
@@ -68,7 +68,7 @@ def get_scratchpad(filename: str):
     content = path.read_text(encoding="utf-8")
     stat = path.stat()
     return {
-        "filename": path.name,
+        "name": path.name,
         "content": content,
         "size": stat.st_size,
         "modified": stat.st_mtime,
@@ -81,8 +81,16 @@ def write_scratchpad(filename: str, body: ScratchpadBody):
     path = _safe_path(filename)
     path.write_text(body.content, encoding="utf-8")
     stat = path.stat()
+
+    # Update Cronicle memory index
+    from ..memory import get_memory_index
+    try:
+        get_memory_index().upsert_document("scratchpad", f"scratchpad/{filename}", body.content)
+    except Exception:
+        pass
+
     return {
-        "filename": path.name,
+        "name": path.name,
         "content": body.content,
         "size": stat.st_size,
         "modified": stat.st_mtime,
@@ -98,4 +106,12 @@ def delete_scratchpad(filename: str):
             status_code=404, detail=f"Scratchpad file '{filename}' not found"
         )
     path.unlink()
-    return {"deleted": True, "filename": filename}
+
+    # Remove from Cronicle memory index
+    from ..memory import get_memory_index
+    try:
+        get_memory_index().remove_document(f"scratchpad/{filename}")
+    except Exception:
+        pass
+
+    return {"deleted": True, "name": filename}

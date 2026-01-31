@@ -250,30 +250,53 @@ async def spawn_claude(
                 result_num_turns = event.get("num_turns", 0)
 
     # -- drive stdout reader with timeout --------------------------------------
+    timed_out = False
     try:
         await asyncio.wait_for(_read_stdout(), timeout=config.claude_timeout_s)
     except asyncio.TimeoutError:
-        log.warning("claude timed out after %ss – killing", config.claude_timeout_s)
+        timed_out = True
+        log.warning("claude timed out after %ss – killing (accumulated %d chars)",
+                     config.claude_timeout_s, len(accumulated))
         await kill_claude(proc)
-        raise ClaudeError(
-            f"claude process timed out after {config.claude_timeout_s}s"
-        )
 
     # -- wait for the process to finish ----------------------------------------
-    await proc.wait()
+    if not timed_out:
+        await proc.wait()
 
     # -- collect stderr --------------------------------------------------------
     stderr_bytes = b""
     if proc.stderr is not None:
-        stderr_bytes = await proc.stderr.read()
+        try:
+            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
     stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
 
     if stderr_text:
         log.warning("claude stderr (exit=%s): %s", proc.returncode, stderr_text)
 
     elapsed = time.time() - started_at
-    log.info("claude done: exit=%s elapsed=%.1fs chunks=%d stderr_len=%d resume=%s lines=%d",
-             proc.returncode, elapsed, len(accumulated), len(stderr_text), resume, len(raw_lines_seen))
+    log.info("claude done: exit=%s elapsed=%.1fs chunks=%d stderr_len=%d resume=%s lines=%d timed_out=%s",
+             proc.returncode, elapsed, len(accumulated), len(stderr_text), resume, len(raw_lines_seen), timed_out)
+
+    # -- graceful timeout: return partial result -------------------------------
+    if timed_out:
+        partial = "".join(accumulated)
+        if partial.strip():
+            partial += f"\n\n⏱ <i>Response truncated after {int(config.claude_timeout_s)}s timeout</i>"
+        else:
+            partial = f"⏱ Timed out after {int(config.claude_timeout_s)}s with no response."
+        return ClaudeResult(
+            text=partial,
+            session_id=result_session_id,
+            model=usage_model,
+            input_tokens=usage_input_tokens,
+            output_tokens=usage_output_tokens,
+            cache_creation_tokens=usage_cache_creation,
+            cache_read_tokens=usage_cache_read,
+            cost_usd=result_cost_usd,
+            num_turns=result_num_turns,
+        )
 
     # -- check for errors ------------------------------------------------------
     if proc.returncode != 0:

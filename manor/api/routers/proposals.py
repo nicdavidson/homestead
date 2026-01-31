@@ -595,11 +595,18 @@ def apply_proposal(proposal_id: str):
                         test_output,
                     )
 
-            # Stage and commit
+            # Stage and commit — force-add lore files (gitignored user overrides)
             for fp in file_paths:
-                _git(["add", fp], timeout=10)
+                force = ["-f"] if fp.startswith("lore/") and not fp.startswith("lore/base/") else []
+                _git(["add"] + force + [fp], timeout=10)
 
-            commit_msg = f"proposal: {title}"
+            # Prefix commit with "lore:" for lore-only changes
+            is_lore = all(fp.startswith("lore/") for fp in file_paths)
+            prefix = "lore" if is_lore else "proposal"
+            commit_msg = f"{prefix}: {title}"
+            description = row["description"]
+            if description:
+                commit_msg += f"\n\n{description}"
             _git(["commit", "-m", commit_msg], check=True)
 
             # Capture commit SHA
@@ -660,5 +667,98 @@ def delete_proposal(proposal_id: str):
         conn.execute("DELETE FROM proposals WHERE id = ?", (proposal_id,))
         conn.commit()
         return {"deleted": True, "id": proposal_id}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Evolution timeline / history endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/history/timeline")
+def history_timeline(
+    file_path: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Chronological timeline of applied proposals, optionally filtered by file path."""
+    conn = _get_conn()
+    try:
+        if file_path:
+            rows = conn.execute(
+                "SELECT * FROM proposals WHERE status = 'applied' "
+                "AND file_paths_json LIKE ? "
+                "ORDER BY applied_at DESC LIMIT ?",
+                (f"%{file_path}%", limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM proposals WHERE status = 'applied' "
+                "ORDER BY applied_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+        results = []
+        for r in rows:
+            d = _row_to_dict(r, conn)
+            results.append({
+                "id": d["id"],
+                "title": d["title"],
+                "description": d["description"],
+                "file_paths": d["file_paths"],
+                "commit_sha": d.get("commit_sha", ""),
+                "applied_at": d["applied_at"],
+                "created_at": d["created_at"],
+                "files": d.get("files", []),
+            })
+        return results
+    finally:
+        conn.close()
+
+
+@router.get("/history/file/{file_path:path}")
+def history_file(
+    file_path: str,
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Git commit history for a specific file, enriched with proposal metadata."""
+    # Get git log for the file
+    result = _git(
+        ["log", f"--max-count={limit}", "--format=%H|%ai|%s", "--", file_path],
+        timeout=15,
+    )
+    commits = []
+    if result.returncode == 0 and result.stdout.strip():
+        for line in result.stdout.strip().splitlines():
+            parts = line.split("|", 2)
+            if len(parts) == 3:
+                commits.append({
+                    "sha": parts[0],
+                    "date": parts[1],
+                    "message": parts[2],
+                })
+
+    # Cross-reference with proposals table
+    conn = _get_conn()
+    try:
+        sha_set = {c["sha"] for c in commits}
+        if sha_set:
+            placeholders = ",".join("?" for _ in sha_set)
+            prop_rows = conn.execute(
+                f"SELECT id, title, description, commit_sha FROM proposals "
+                f"WHERE commit_sha IN ({placeholders})",
+                list(sha_set),
+            ).fetchall()
+            sha_to_proposal = {
+                r["commit_sha"]: {"id": r["id"], "title": r["title"], "description": r["description"]}
+                for r in prop_rows
+            }
+        else:
+            sha_to_proposal = {}
+
+        for c in commits:
+            c["proposal"] = sha_to_proposal.get(c["sha"])
+
+        return {"file_path": file_path, "commits": commits}
     finally:
         conn.close()

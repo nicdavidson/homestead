@@ -28,9 +28,9 @@ out/
 .DS_Store
 Thumbs.db
 
-# Homestead — personal lore files (only .example templates are committed)
+# Homestead — user lore overrides (base templates tracked in lore/base/)
 lore/*.md
-!lore/*.md.example
+!lore/base/
 ~/.homestead/
 
 # Config overrides (runtime, per-instance)

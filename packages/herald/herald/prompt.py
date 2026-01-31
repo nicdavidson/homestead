@@ -70,15 +70,52 @@ def assemble_system_prompt(config: Config) -> str:
                 f"Use it to store notes, plans, and context that should persist across sessions."
             )
 
+    # 5b. Journal hint
+    journal_dir = Path(config.homestead_data_dir).expanduser() / "journal"
+    if journal_dir.is_dir():
+        journal_files = sorted(journal_dir.glob("*.md"), reverse=True)
+        if journal_files:
+            recent = [f.stem for f in journal_files[:5]]
+            parts.append(
+                f"# Journal (Cronicle)\n\n"
+                f"You have {len(journal_files)} journal entries. "
+                f"Recent: {', '.join(recent)}. "
+                f"Use `write_journal` to record reflections after sessions. "
+                f"Use `search_memory` to find past context across all memory."
+            )
+        else:
+            parts.append(
+                "# Journal (Cronicle)\n\n"
+                "Your journal is empty. Use `write_journal` to record reflections, "
+                "learnings, and session summaries. Use `search_memory` to find past context."
+            )
+
     # 6. Any extra lore files (*.md in lore/ not already loaded)
     _loaded = {"soul.md", "identity.md", "claude.md", "user.md", "agents.md"}
     if config.lore_dir:
         lore_path = Path(config.lore_dir)
+        seen: set[str] = set()
+        # User overrides first
         for f in sorted(lore_path.glob("*.md")):
             if f.name not in _loaded:
-                content = f.read_text(encoding="utf-8").strip()
-                if content:
-                    parts.append(content)
+                seen.add(f.name)
+                try:
+                    content = f.read_text(encoding="utf-8").strip()
+                    if content:
+                        parts.append(content)
+                except OSError:
+                    pass
+        # Base defaults for anything not already covered
+        base_path = lore_path / "base"
+        if base_path.is_dir():
+            for f in sorted(base_path.glob("*.md")):
+                if f.name not in _loaded and f.name not in seen:
+                    try:
+                        content = f.read_text(encoding="utf-8").strip()
+                        if content:
+                            parts.append(content)
+                    except OSError:
+                        pass
 
     # 7. MCP tools awareness — remind the agent what it can do via homestead
     if config.mcp_config_path:
@@ -104,6 +141,7 @@ Use them proactively — don't just talk about what you could do, actually do it
 - **Lore**: `list_lore`, `read_lore`, `write_lore` — read and update your identity/context files
 - **Skills**: `list_skills`, `read_skill`, `write_skill`, `delete_skill` — manage reusable skill documents
 - **Scratchpad**: `list_scratchpad`, `read_scratchpad`, `write_scratchpad`, `delete_scratchpad` — persistent notes/memory
+- **Cronicle (Memory)**: `search_memory`, `write_journal`, `read_journal`, `list_journal` — search all memory, record reflections
 - **Proposals**: `propose_code_change` — propose code changes for human review (don't modify code directly)
 - **Outbox**: `send_message` — send messages to Telegram chats
 - **Health**: `check_health` — check system health
@@ -114,22 +152,34 @@ Use them proactively — don't just talk about what you could do, actually do it
 - For code changes to the homestead codebase, use `propose_code_change` instead of editing files directly. This creates a reviewable proposal.
 - Use tasks to track your work. Create tasks for things you need to do, update status as you go.
 - Write to scratchpad to remember things across sessions.
-- Check your scratchpad and tasks at the start of conversations for context on ongoing work.
+- Use `search_memory` to find past context before answering questions about topics you may have covered before.
+- Use `write_journal` at the end of sessions to record what you learned, decisions made, and reflections.
+- Core lore files (soul, identity, claude, user, agents) require human review — `write_lore` will create a proposal for those.
 """
 
 
 def _read_lore(config: Config, filename: str) -> str | None:
+    """Read a lore file with layered fallback: user override -> base default."""
     if not config.lore_dir:
         return None
-    path = Path(config.lore_dir) / filename
-    if not path.is_file():
-        return None
-    try:
-        content = path.read_text(encoding="utf-8").strip()
-        return content if content else None
-    except OSError:
-        log.debug("Failed to read lore file: %s", path)
-        return None
+    lore_path = Path(config.lore_dir)
+    # Check user override first
+    user_file = lore_path / filename
+    if user_file.is_file():
+        try:
+            content = user_file.read_text(encoding="utf-8").strip()
+            return content if content else None
+        except OSError:
+            pass
+    # Fall back to base default
+    base_file = lore_path / "base" / filename
+    if base_file.is_file():
+        try:
+            content = base_file.read_text(encoding="utf-8").strip()
+            return content if content else None
+        except OSError:
+            pass
+    return None
 
 
 def _build_skills_section(config: Config) -> str | None:

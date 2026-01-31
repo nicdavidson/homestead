@@ -1,0 +1,2 @@
+# Base lore templates — use union merge to reduce conflicts on pull
+lore/base/*.md merge=union

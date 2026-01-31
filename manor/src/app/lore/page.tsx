@@ -5,12 +5,16 @@ import { api } from "@/lib/api";
 
 interface LoreFile {
   name: string;
-  content: string;
+  size: number;
+  modified: number;
+  layer: string;
+  has_base: boolean;
 }
 
 export default function LorePage() {
   const [files, setFiles] = useState<LoreFile[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedLayer, setSelectedLayer] = useState<string>("");
   const [content, setContent] = useState("");
   const [originalContent, setOriginalContent] = useState("");
   const [loading, setLoading] = useState(true);
@@ -24,7 +28,7 @@ export default function LorePage() {
       const data = await api.lore.list();
       setFiles(data);
       if (data.length > 0 && !selectedFile && data[0]?.name) {
-        selectFile(data[0].name, data);
+        loadFileContent(data[0].name);
       }
       setError(null);
     } catch (err) {
@@ -34,22 +38,13 @@ export default function LorePage() {
     }
   }
 
-  function selectFile(name: string, fileList?: LoreFile[]) {
-    const list = fileList || files;
-    const file = list.find((f) => f.name === name);
-    setSelectedFile(name);
-    const c = file?.content || "";
-    setContent(c);
-    setOriginalContent(c);
-    setSuccessMsg(null);
-  }
-
   async function loadFileContent(name: string) {
     try {
       const data = await api.lore.get(name);
       setContent(data.content);
       setOriginalContent(data.content);
       setSelectedFile(name);
+      setSelectedLayer(data.layer);
       setSuccessMsg(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load file");
@@ -67,6 +62,7 @@ export default function LorePage() {
       setSaving(true);
       await api.lore.save(selectedFile, content);
       setOriginalContent(content);
+      setSelectedLayer("user");
       setSuccessMsg("Saved successfully");
       setTimeout(() => setSuccessMsg(null), 2000);
       await loadFiles();
@@ -103,13 +99,22 @@ export default function LorePage() {
                 <li key={file.name}>
                   <button
                     onClick={() => loadFileContent(file.name)}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                    className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between gap-2 ${
                       selectedFile === file.name
                         ? "bg-amber-500/10 text-amber-500 font-medium"
                         : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800"
                     }`}
                   >
-                    {file.name}
+                    <span className="truncate">{file.name}</span>
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded-full shrink-0 ${
+                        file.layer === "user"
+                          ? "bg-emerald-500/15 text-emerald-400"
+                          : "bg-neutral-700/50 text-neutral-500"
+                      }`}
+                    >
+                      {file.layer}
+                    </span>
                   </button>
                 </li>
               ))}
@@ -138,6 +143,15 @@ export default function LorePage() {
                 <h2 className="text-sm font-semibold text-neutral-200">
                   {selectedFile}
                 </h2>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full ${
+                    selectedLayer === "user"
+                      ? "bg-emerald-500/15 text-emerald-400"
+                      : "bg-neutral-700/50 text-neutral-500"
+                  }`}
+                >
+                  {selectedLayer === "base" ? "base default" : "user override"}
+                </span>
                 {hasChanges && (
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">
                     Modified
@@ -154,9 +168,16 @@ export default function LorePage() {
                 disabled={saving || !hasChanges}
                 className="px-4 py-1.5 rounded-lg bg-amber-500 text-neutral-950 font-medium text-sm hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                {saving ? "Saving..." : "Save"}
+                {saving ? "Saving..." : selectedLayer === "base" ? "Save as Override" : "Save"}
               </button>
             </div>
+
+            {/* Base file hint */}
+            {selectedLayer === "base" && (
+              <div className="px-4 py-2 bg-neutral-800/50 border-b border-neutral-800 text-xs text-neutral-500">
+                Viewing base default. Saving will create a user override — the base template stays unchanged.
+              </div>
+            )}
 
             {/* Textarea */}
             <div className="flex-1 p-4 overflow-hidden">

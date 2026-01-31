@@ -21,11 +21,15 @@ You have access to homestead tools via MCP. These let you:
 - Read and write lore files (your identity and context)
 - Read and write scratchpad notes (persistent memory)
 - Propose code changes for human review (propose_code_change)
+- Search all memory: lore, scratchpad, journal (search_memory)
+- Write journal reflections (write_journal, read_journal, list_journal)
 - Send messages via the outbox
 - Check system health and usage stats
 
 Use these tools proactively. When you want to change code, always use propose_code_change \
-so the human can review before applying."""
+so the human can review before applying. Use search_memory to find past context. \
+Use write_journal to record reflections and learnings after sessions. \
+Core lore files require human review — write_lore will create a proposal for those."""
 
 
 def _read_file(path: Path) -> str | None:
@@ -35,6 +39,17 @@ def _read_file(path: Path) -> str | None:
     except Exception:
         logger.warning("prompt: could not read %s — skipping", path)
         return None
+
+
+def _read_lore_layered(lore_dir: Path, filename: str) -> str | None:
+    """Read a lore file with layered fallback: user override -> base default."""
+    user_path = lore_dir / filename
+    if user_path.is_file():
+        return _read_file(user_path)
+    base_path = lore_dir / "base" / filename
+    if base_path.is_file():
+        return _read_file(base_path)
+    return None
 
 
 def _parse_skill_frontmatter(text: str) -> tuple[str, str]:
@@ -107,19 +122,61 @@ def _build_scratchpad_hint() -> str | None:
     )
 
 
+def _build_journal_hint() -> str | None:
+    """Note journal entries for Cronicle memory."""
+    journal_dir: Path = settings.journal_dir
+    if not journal_dir.is_dir():
+        return None
+
+    files = sorted(journal_dir.glob("*.md"), reverse=True)
+    if not files:
+        return (
+            "# Journal (Cronicle)\n\n"
+            "Your journal is empty. Use `write_journal` to record reflections, "
+            "learnings, and session summaries. Use `search_memory` to find past context."
+        )
+
+    recent = [f.stem for f in files[:5]]
+    return (
+        f"# Journal (Cronicle)\n\n"
+        f"You have {len(files)} journal entries. "
+        f"Recent: {', '.join(recent)}. "
+        f"Use `write_journal` to record reflections after sessions. "
+        f"Use `search_memory` to find past context across all memory."
+    )
+
+
 def _collect_extra_lore() -> str | None:
-    """Load any *.md files in lore/ not already consumed by the core steps."""
+    """Load any *.md files in lore/ not already consumed by the core steps.
+
+    Merges files from both user overrides and base defaults, user wins.
+    """
     lore_path: Path = settings.lore_path
     if not lore_path.is_dir():
         return None
 
+    # Collect filenames from both dirs, user takes precedence
+    seen: set[str] = set()
     parts: list[str] = []
+
+    # User overrides first
     for md in sorted(lore_path.glob("*.md")):
         if md.name in _CORE_LORE_FILES:
             continue
+        seen.add(md.name)
         content = _read_file(md)
         if content:
             parts.append(content)
+
+    # Base defaults for anything not already covered
+    base_path = lore_path / "base"
+    if base_path.is_dir():
+        for md in sorted(base_path.glob("*.md")):
+            if md.name in _CORE_LORE_FILES or md.name in seen:
+                continue
+            content = _read_file(md)
+            if content:
+                parts.append(content)
 
     return "\n\n".join(parts) if parts else None
 
@@ -134,27 +191,27 @@ def assemble_system_prompt() -> str:
     lore_path: Path = settings.lore_path
 
     # 1. Soul
-    soul = _read_file(lore_path / "soul.md")
+    soul = _read_lore_layered(lore_path, "soul.md")
     if soul:
         parts.append(soul)
 
     # 2. Identity
-    identity = _read_file(lore_path / "identity.md")
+    identity = _read_lore_layered(lore_path, "identity.md")
     if identity:
         parts.append(identity)
 
     # 3. Behavior (Claude-specific directives)
-    behavior = _read_file(lore_path / "claude.md")
+    behavior = _read_lore_layered(lore_path, "claude.md")
     if behavior:
         parts.append(behavior)
 
     # 4. User context
-    user_ctx = _read_file(lore_path / "user.md")
+    user_ctx = _read_lore_layered(lore_path, "user.md")
     if user_ctx:
         parts.append(user_ctx)
 
     # 5. Agents
-    agents = _read_file(lore_path / "agents.md")
+    agents = _read_lore_layered(lore_path, "agents.md")
     if agents:
         parts.append(agents)
 
@@ -167,6 +224,11 @@ def assemble_system_prompt() -> str:
     scratchpad = _build_scratchpad_hint()
     if scratchpad:
         parts.append(scratchpad)
+
+    # 5b. Journal hint (Cronicle)
+    journal_hint = _build_journal_hint()
+    if journal_hint:
+        parts.append(journal_hint)
 
     # 6. MCP awareness
     parts.append(_MCP_SECTION)

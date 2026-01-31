@@ -38,6 +38,75 @@ log = logging.getLogger(__name__)
 _MANOR_API_URL = os.environ.get("MANOR_API_URL", "http://localhost:8700")
 
 
+# ---------------------------------------------------------------------------
+# Manor API helpers
+# ---------------------------------------------------------------------------
+
+
+async def _manor_get(path: str, params: dict | None = None, timeout: float = 5.0):
+    """GET from Manor API. Returns parsed JSON or None on failure."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(f"{_MANOR_API_URL}{path}", params=params)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        log.warning("Manor API GET %s failed: %s", path, exc)
+        return None
+
+
+async def _manor_post(path: str, json_body: dict | None = None, timeout: float = 10.0):
+    """POST to Manor API. Returns parsed JSON or None on failure."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(f"{_MANOR_API_URL}{path}", json=json_body)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        log.warning("Manor API POST %s failed: %s", path, exc)
+        return None
+
+
+async def _manor_put(path: str, json_body: dict | None = None, timeout: float = 5.0):
+    """PUT to Manor API. Returns parsed JSON or None on failure."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.put(f"{_MANOR_API_URL}{path}", json=json_body)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        log.warning("Manor API PUT %s failed: %s", path, exc)
+        return None
+
+
+async def _manor_patch(path: str, json_body: dict | None = None, timeout: float = 5.0):
+    """PATCH to Manor API. Returns parsed JSON or None on failure."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.patch(f"{_MANOR_API_URL}{path}", json=json_body)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as exc:
+        log.warning("Manor API PATCH %s failed: %s", path, exc)
+        return None
+
+
+def _time_ago(ts: float) -> str:
+    """Format a timestamp as a human-readable relative time."""
+    diff = time.time() - ts
+    if diff < 60:
+        return "just now"
+    if diff < 3600:
+        return f"{int(diff / 60)}m ago"
+    if diff < 86400:
+        return f"{diff / 3600:.1f}h ago"
+    return f"{diff / 86400:.0f}d ago"
+
+
 async def _report_usage(result: ClaudeResult, session_name: str, chat_id: int, started_at: float) -> None:
     """POST usage data to Manor API in the background (best-effort)."""
     if result.input_tokens == 0 and result.output_tokens == 0:
@@ -61,6 +130,62 @@ async def _report_usage(result: ClaudeResult, session_name: str, chat_id: int, s
             })
     except Exception as exc:
         log.warning("chat=%d usage reporting failed: %s", chat_id, exc)
+
+
+_REFLECTION_PROMPT = (
+    "Briefly reflect on this conversation. "
+    "If you learned something about the user's preferences or context, update lore/user.md via write_lore. "
+    "If you developed a useful pattern or workflow, create a skill via write_skill. "
+    "Write a concise journal entry via write_journal summarizing what happened. "
+    "Keep it short — 2-3 sentences max. Do NOT send any messages to the user."
+)
+
+_REFLECTION_MIN_MESSAGES = 5
+_REFLECTION_COOLDOWN_SECONDS = 900  # 15 minutes between reflections per session
+_last_reflection: dict[str, float] = {}  # session_name -> timestamp
+
+
+async def _maybe_reflect(
+    session: "SessionMeta",
+    session_mgr: "SessionManager",
+    config: "Config",
+) -> None:
+    """Fire-and-forget post-conversation reflection using a cheap model.
+
+    Only triggers after substantive conversations (5+ messages).
+    The reflection response is NOT sent to the user — it's purely
+    for the agent's internal memory and self-improvement.
+    """
+    try:
+        if session.message_count < _REFLECTION_MIN_MESSAGES:
+            return
+
+        now = time.time()
+        last = _last_reflection.get(session.name, 0)
+        if now - last < _REFLECTION_COOLDOWN_SECONDS:
+            return
+        _last_reflection[session.name] = now
+
+        log.info("session=%s triggering reflection (msgs=%d)", session.name, session.message_count)
+
+        # Force haiku model for cheap reflection (override session model)
+        from copy import copy
+        reflection_session = copy(session)
+        reflection_session.model = "haiku"
+
+        result = await dispatch_message(
+            _REFLECTION_PROMPT,
+            reflection_session,
+            config,
+            on_delta=None,
+        )
+
+        log.info(
+            "session=%s reflection done (%d chars, model=%s)",
+            session.name, len(result.text), result.model,
+        )
+    except Exception as exc:
+        log.warning("session=%s reflection failed: %s", session.name, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +431,9 @@ async def process_queue(
             # Report usage to Manor API (fire-and-forget)
             asyncio.create_task(_report_usage(result, session.name, chat_id, spawn_started_at))
 
+            # Post-conversation reflection (fire-and-forget, non-blocking)
+            asyncio.create_task(_maybe_reflect(session, sessions, config))
+
             if result.session_id and result.session_id != session.claude_session_id:
                 sessions.update_session_id(session, result.session_id)
 
@@ -384,7 +512,22 @@ async def process_queue(
             log.error("chat=%s claude error: %s", chat_id, e)
             if typing_task is not None:
                 typing_task.cancel()
-            await bot.send_message(chat_id, f"Error: {e}")
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            # Truncate retry data to fit callback_data 64-byte limit
+            retry_text = msg.text[:50] if msg.text else ""
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="\U0001f504 Retry", callback_data=f"retry:{retry_text}"),
+                InlineKeyboardButton(text="\u2728 New Session", callback_data="new_session"),
+            ]])
+            error_msg = str(e)
+            if len(error_msg) > 200:
+                error_msg = error_msg[:200] + "..."
+            await bot.send_message(
+                chat_id,
+                f"\u274c <b>Error:</b> {html.escape(error_msg)}",
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+            )
 
         except Exception as e:
             log.exception("chat=%s unexpected error: %s", chat_id, e)
@@ -433,13 +576,26 @@ def create_bot(
             await message.answer("No active session.")
             return
         age_hours = (time.time() - session.created_at) / 3600
-        await message.answer(
-            f"Session: {session.name}\n"
-            f"Model: {session.model}\n"
-            f"ID: {session.claude_session_id[:8]}...\n"
-            f"Messages: {session.message_count}\n"
-            f"Age: {age_hours:.1f}h"
-        )
+        lines = [
+            f"\U0001f4ac <b>Session: {html.escape(session.name)}</b>",
+            "",
+            f"\U0001f916 Model: <code>{html.escape(session.model)}</code>",
+            f"\U0001f194 ID: <code>{session.claude_session_id[:8]}...</code>",
+            f"\U0001f4e8 Messages: {session.message_count}",
+            f"\u23f1 Age: {age_hours:.1f}h",
+        ]
+        # Queue status
+        depth = queue.depth(message.chat.id)
+        if depth > 0:
+            lines.append(f"\u23f3 Queue: {depth} message(s) pending")
+        # Staleness
+        if sessions.is_stale(session):
+            lines.append(f"\n\u26a0\ufe0f Session is stale (>{config.session_inactivity_hours}h inactive)")
+        # Usage (best-effort)
+        usage = await _manor_get("/api/usage/summary")
+        if usage and usage.get("cost_24h"):
+            lines.append(f"\n\U0001f4b0 Today: ${usage['cost_24h']:.2f} / {usage.get('tokens_24h', 0):,} tokens")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
     @dp.message(Command("cancel"))
     async def cmd_cancel(message: types.Message):
@@ -831,24 +987,336 @@ def create_bot(
         except Exception as e:
             await callback.message.answer(f"\u274c Error: {e}")
 
+    # -- Error recovery callback handlers -----------------------------------
+
+    @dp.callback_query(F.data.startswith("retry:"))
+    async def handle_retry(callback: types.CallbackQuery):
+        """Re-enqueue the last failed message for retry."""
+        chat_id = callback.message.chat.id
+        await callback.answer("Retrying...")
+        # Extract the original text from callback data
+        original_text = callback.data.split(":", 1)[1] if ":" in callback.data else ""
+        if not original_text:
+            await callback.message.answer("Nothing to retry.")
+            return
+        queued = QueuedMessage(
+            chat_id=chat_id,
+            user_id=callback.from_user.id,
+            text=original_text,
+            timestamp=time.time(),
+        )
+        queue.enqueue(queued)
+        if not queue.is_active(chat_id):
+            asyncio.create_task(process_queue(bot, chat_id, config, sessions, queue))
+
+    @dp.callback_query(F.data == "new_session")
+    async def handle_new_session_recovery(callback: types.CallbackQuery):
+        """Rotate session after an error."""
+        chat_id = callback.message.chat.id
+        await callback.answer("Starting fresh session...")
+        session = sessions.get_active(chat_id)
+        model = session.model if session else "claude"
+        name = session.name if session else "default"
+        sessions.rotate(chat_id, callback.from_user.id, name, model)
+        await callback.message.answer(f"Fresh session started ({name}/{model}). Please resend your message.")
+
+    # -- New system commands ------------------------------------------------
+
+    @dp.message(Command("health"))
+    async def cmd_health(message: types.Message):
+        health = await _manor_get("/health/detailed")
+        metrics = await _manor_get("/metrics")
+
+        if not health:
+            await message.answer("Could not reach Manor API.")
+            return
+
+        status_emoji = "\u2705" if health.get("status") == "ok" else "\u26a0\ufe0f"
+        lines = [f"{status_emoji} <b>System: {health.get('status', '?').upper()}</b>", ""]
+
+        # DB health
+        db_status = health.get("databases", {})
+        unhealthy = [n for n, info in db_status.items() if info.get("exists") and not info.get("healthy")]
+        if unhealthy:
+            lines.append(f"\u274c DBs unhealthy: {', '.join(unhealthy)}")
+        else:
+            lines.append(f"\u2705 All databases healthy ({len(db_status)})")
+
+        if metrics:
+            usage = metrics.get("usage", {})
+            cost = usage.get("cost_24h", 0)
+            tokens = usage.get("tokens_24h", 0)
+            lines.append(f"\U0001f4b0 24h: ${cost:.2f} / {tokens:,} tokens")
+
+            tasks = metrics.get("tasks", {})
+            by_status = tasks.get("by_status", {})
+            lines.append(f"\U0001f4cb Tasks: {by_status.get('pending', 0)} pending, {by_status.get('in_progress', 0)} active")
+
+            jobs = metrics.get("jobs", {})
+            lines.append(f"\u23f0 Jobs: {jobs.get('enabled', 0)} active / {jobs.get('total', 0)} total")
+
+            logs_m = metrics.get("logs", {})
+            errors_1h = logs_m.get("last_1h", {}).get("ERROR", 0)
+            warnings_1h = logs_m.get("last_1h", {}).get("WARNING", 0)
+            if errors_1h > 0 or warnings_1h > 0:
+                lines.append(f"\u26a0\ufe0f Last hour: {errors_1h} errors, {warnings_1h} warnings")
+
+        # Active alerts
+        alerts = await _manor_get("/api/alerts/history", params={"limit": 5})
+        if alerts:
+            unresolved = [a for a in alerts if not a.get("resolved")]
+            if unresolved:
+                lines.append(f"\n\U0001f6a8 <b>{len(unresolved)} active alert(s):</b>")
+                for a in unresolved[:3]:
+                    lines.append(f"  \u2022 {html.escape(a['message'][:60])}")
+
+        # Current session
+        session = sessions.get_active(message.chat.id)
+        if session:
+            age_h = (time.time() - session.created_at) / 3600
+            lines.append(f"\n\U0001f4ac {session.name} ({session.model}) \u2022 {session.message_count} msgs \u2022 {age_h:.1f}h")
+
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
+    @dp.message(Command("alerts"))
+    async def cmd_alerts(message: types.Message):
+        args = (message.text or "").split()[1:]
+
+        if args and args[0] == "rules":
+            rules = await _manor_get("/api/alerts/rules")
+            if not rules:
+                await message.answer("No alert rules found.")
+                return
+            lines = ["<b>Alert Rules:</b>", ""]
+            for r in rules:
+                icon = "\u2705" if r["enabled"] else "\u23f8\ufe0f"
+                lines.append(f"{icon} <b>{html.escape(r['name'])}</b> ({r['rule_type']})")
+                if r.get("description"):
+                    lines.append(f"    {html.escape(r['description'][:60])}")
+            await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+            return
+
+        if args and args[0] == "check":
+            result = await _manor_post("/api/alerts/check")
+            if result:
+                n = result.get("alerts_fired", 0)
+                if n > 0:
+                    msgs = result.get("messages", [])
+                    text = f"\U0001f6a8 {n} alert(s) fired:\n" + "\n".join(f"  \u2022 {m[:80]}" for m in msgs[:5])
+                else:
+                    text = "\u2705 All clear \u2014 no alerts triggered."
+                await message.answer(text)
+            else:
+                await message.answer("Alert check failed (Manor API unreachable).")
+            return
+
+        # Default: recent history
+        history = await _manor_get("/api/alerts/history", params={"limit": 10})
+        if not history:
+            await message.answer("No recent alerts.")
+            return
+
+        lines = ["<b>Recent Alerts:</b>", ""]
+        for a in history:
+            status = "\u2705" if a.get("resolved") else "\U0001f534"
+            ts = _time_ago(a["fired_at"])
+            lines.append(f"{status} <b>{ts}</b>")
+            lines.append(f"  {html.escape(a['message'][:80])}")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
+    @dp.message(Command("proposals"))
+    async def cmd_proposals(message: types.Message):
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+        args = (message.text or "").split()[1:]
+        status_filter = args[0] if args else "pending"
+
+        data = await _manor_get("/api/proposals", params={"status": status_filter, "limit": 10})
+        proposals = data.get("proposals", []) if data else []
+
+        if not proposals:
+            await message.answer(f"No {status_filter} proposals.")
+            return
+
+        for p in proposals:
+            files_str = ", ".join(p.get("file_paths", [])[:3])
+            text = (
+                f"\U0001f4dd <b>{html.escape(p['title'])}</b>\n"
+                f"{html.escape((p.get('description') or '')[:200])}\n"
+                f"Files: {html.escape(files_str)}"
+            )
+
+            if p["status"] == "pending":
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="\u2705 Approve", callback_data=f"proposal_approve:{p['id']}"),
+                    InlineKeyboardButton(text="\u274c Reject", callback_data=f"proposal_reject:{p['id']}"),
+                    InlineKeyboardButton(text="\U0001f50d Info", callback_data=f"proposal_info:{p['id']}"),
+                ]])
+                await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            else:
+                icon = {
+                    "approved": "\u2705", "applied": "\u2705",
+                    "rejected": "\u274c",
+                }.get(p["status"], "\u2022")
+                await message.answer(f"{icon} [{p['status']}] {text}", parse_mode=ParseMode.HTML)
+
+    @dp.message(Command("jobs"))
+    async def cmd_jobs(message: types.Message):
+        args = (message.text or "").split()[1:]
+
+        if args and args[0] == "run" and len(args) > 1:
+            job_name = " ".join(args[1:])
+            jobs_data = await _manor_get("/api/jobs")
+            if not jobs_data:
+                await message.answer("Could not reach Manor API.")
+                return
+            job = next((j for j in jobs_data if j["name"].lower() == job_name.lower()), None)
+            if not job:
+                await message.answer(f"Job not found: {job_name}")
+                return
+            result = await _manor_post(f"/api/jobs/{job['id']}/run", timeout=30.0)
+            if result and result.get("executed"):
+                await message.answer(f"\u2705 Job '{job['name']}' executed.")
+            else:
+                await message.answer(f"\u26a0\ufe0f Job '{job['name']}' failed to execute.")
+            return
+
+        if args and args[0] == "toggle" and len(args) > 1:
+            job_name = " ".join(args[1:])
+            jobs_data = await _manor_get("/api/jobs")
+            if not jobs_data:
+                await message.answer("Could not reach Manor API.")
+                return
+            job = next((j for j in jobs_data if j["name"].lower() == job_name.lower()), None)
+            if not job:
+                await message.answer(f"Job not found: {job_name}")
+                return
+            result = await _manor_put(f"/api/jobs/{job['id']}/toggle")
+            if result:
+                state = "enabled" if result.get("enabled") else "disabled"
+                await message.answer(f"Job '{job['name']}' {state}.")
+            else:
+                await message.answer("Toggle failed.")
+            return
+
+        # Default: list all jobs
+        jobs_data = await _manor_get("/api/jobs")
+        if not jobs_data:
+            await message.answer("No jobs found.")
+            return
+        lines = ["<b>Scheduled Jobs:</b>", ""]
+        for j in jobs_data:
+            icon = "\u2705" if j.get("enabled") else "\u23f8\ufe0f"
+            sched = j.get("schedule", {})
+            sched_str = f"{sched.get('type', '?')}: {sched.get('value', '?')}" if isinstance(sched, dict) else str(sched)
+            runs = j.get("run_count", 0)
+            lines.append(f"{icon} <b>{html.escape(j['name'])}</b>")
+            lines.append(f"    {sched_str} \u2022 {runs} runs")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
+    @dp.message(Command("search"))
+    async def cmd_search(message: types.Message):
+        parts = (message.text or "").split(None, 1)
+        if len(parts) < 2:
+            await message.answer("Usage: /search &lt;query&gt;", parse_mode=ParseMode.HTML)
+            return
+
+        query = parts[1]
+        results = await _manor_get("/api/memory/search", params={"q": query, "limit": 5})
+        if not results or not results.get("results"):
+            await message.answer("No results found.")
+            return
+
+        lines = [f"\U0001f50d <b>Search: {html.escape(query)}</b>", ""]
+        for r in results["results"]:
+            title = r.get("title") or r.get("source", "untitled")
+            lines.append(f"\u2022 <b>{html.escape(title)}</b>")
+            snippet = r.get("snippet") or r.get("content", "")
+            if snippet:
+                lines.append(f"  {html.escape(snippet[:120])}")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
+    @dp.message(Command("journal"))
+    async def cmd_journal(message: types.Message):
+        parts = (message.text or "").split(None, 1)
+
+        if len(parts) < 2:
+            # List recent entries
+            entries = await _manor_get("/api/journal", params={"limit": 10})
+            if not entries:
+                await message.answer("Journal is empty. Use /journal &lt;text&gt; to write.", parse_mode=ParseMode.HTML)
+                return
+            lines = ["\U0001f4d3 <b>Recent Journal Entries:</b>", ""]
+            for e in (entries if isinstance(entries, list) else []):
+                date = e.get("date", "?")
+                preview = (e.get("content") or "")[:60]
+                lines.append(f"\u2022 <b>{date}</b>: {html.escape(preview)}")
+            await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+            return
+
+        # Write entry
+        entry = parts[1]
+        result = await _manor_post("/api/journal/append", json_body={"content": entry})
+        if result:
+            await message.answer("\U0001f4d3 Journal entry saved.")
+        else:
+            await message.answer("Failed to save journal entry.")
+
+    @dp.message(Command("skills"))
+    async def cmd_skills(message: types.Message):
+        args = (message.text or "").split(None, 1)
+
+        if len(args) > 1:
+            name = args[1].strip()
+            skill = await _manor_get(f"/api/skills/{name}")
+            if not skill:
+                await message.answer(f"Skill '{name}' not found.")
+                return
+            content = skill.get("content", "")
+            if len(content) > 3500:
+                content = content[:3500] + "\n\n... (truncated)"
+            text = (
+                f"\U0001f4da <b>{html.escape(skill.get('name', name))}</b>\n\n"
+                f"<pre>{html.escape(content)}</pre>"
+            )
+            await message.answer(text, parse_mode=ParseMode.HTML)
+            return
+
+        # List all skills
+        skills_data = await _manor_get("/api/skills")
+        if not skills_data:
+            await message.answer("No skills found.")
+            return
+        lines = ["\U0001f4da <b>Skills:</b>", ""]
+        for s in (skills_data if isinstance(skills_data, list) else []):
+            desc = f" \u2014 {s['description']}" if s.get("description") else ""
+            lines.append(f"\u2022 <b>{html.escape(s['name'])}</b>{html.escape(desc)}")
+        lines.append("\nUse /skills &lt;name&gt; to read one.")
+        await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
+
     @dp.message(Command("help"))
     async def cmd_help(message: types.Message):
         await message.answer(
-            "/new \u2014 Start a fresh conversation\n"
-            "/status \u2014 Show session info\n"
+            "<b>Chat</b>\n"
+            "/new \u2014 Fresh conversation\n"
+            "/status \u2014 Session info + usage\n"
+            "/model [model] \u2014 Show/change model\n"
             "/session [name] [model] \u2014 Switch/create session\n"
             "/sessions \u2014 List all sessions\n"
-            "/model [model] \u2014 Show/change model\n"
-            "/task [title] \u2014 Create a task\n"
-            "/task list [status] \u2014 List tasks\n"
-            "/task done \u2014 Complete current task\n"
-            "/task summary \u2014 Task counts\n"
-            "/scratchpad \u2014 List notes\n"
-            "/scratchpad <name> \u2014 Read a note\n"
-            "/scratchpad <name> <text> \u2014 Write/append to a note\n"
-            "/logs [hours] \u2014 Show log summary\n"
-            "/cancel \u2014 Cancel current request\n"
-            "/help \u2014 Show this message"
+            "/cancel \u2014 Cancel current request\n\n"
+            "<b>System</b>\n"
+            "/health \u2014 System health overview\n"
+            "/alerts [rules|check] \u2014 View/manage alerts\n"
+            "/proposals [status] \u2014 Review proposals\n"
+            "/jobs [run|toggle name] \u2014 Manage jobs\n"
+            "/logs [hours] \u2014 Log summary\n\n"
+            "<b>Knowledge</b>\n"
+            "/search &lt;query&gt; \u2014 Search memory\n"
+            "/journal [text] \u2014 Write/list journal\n"
+            "/skills [name] \u2014 List/read skills\n"
+            "/task [title|list|done|summary] \u2014 Tasks\n"
+            "/scratchpad [name] [text] \u2014 Notes",
+            parse_mode=ParseMode.HTML,
         )
 
     # -- Media messages --------------------------------------------------
@@ -888,6 +1356,9 @@ def create_bot(
             return
 
         if queue.is_active(chat_id):
+            depth = queue.depth(chat_id)
+            if depth > 0:
+                await message.answer(f"\u23f3 Queued ({depth} ahead)")
             return
 
         asyncio.create_task(process_queue(bot, chat_id, config, sessions, queue))
@@ -928,6 +1399,9 @@ def create_bot(
             return
 
         if queue.is_active(chat_id):
+            depth = queue.depth(chat_id)
+            if depth > 0:
+                await message.answer(f"\u23f3 Queued ({depth} ahead)")
             return
 
         asyncio.create_task(process_queue(bot, chat_id, config, sessions, queue))
@@ -948,6 +1422,9 @@ def create_bot(
             return
 
         if queue.is_active(chat_id):
+            depth = queue.depth(chat_id)
+            if depth > 0:
+                await message.answer(f"\u23f3 Queued ({depth} ahead)")
             return
 
         asyncio.create_task(process_queue(bot, chat_id, config, sessions, queue))
@@ -980,6 +1457,9 @@ def create_bot(
         await message.answer(f"\U0001f3a4 <i>{text}</i>", parse_mode=ParseMode.HTML)
 
         if queue.is_active(chat_id):
+            depth = queue.depth(chat_id)
+            if depth > 0:
+                await message.answer(f"\u23f3 Queued ({depth} ahead)")
             return
 
         asyncio.create_task(process_queue(bot, chat_id, config, sessions, queue))

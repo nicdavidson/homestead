@@ -18,13 +18,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .routers import (
+    alerts,
+    backup,
     chat,
     config_routes,
     events,
     health,
     jobs,
+    journal,
     logs,
     lore,
+    memory,
     outbox,
     proposals,
     scratchpad,
@@ -43,6 +47,32 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 log = logging.getLogger("manor.api")
+
+
+def _init_watchtower() -> None:
+    """Wire Manor API logs into the shared Watchtower database."""
+    try:
+        import sys
+        from pathlib import Path
+
+        common_pkg = str(Path(__file__).resolve().parent.parent.parent / "packages" / "common")
+        if common_pkg not in sys.path:
+            sys.path.insert(0, common_pkg)
+
+        from common.watchtower import Watchtower, WatchtowerHandler
+
+        wt = Watchtower(str(settings.watchtower_db))
+        handler = WatchtowerHandler(wt, source="manor")
+        handler.setLevel(logging.WARNING)  # Only WARNING+ to avoid flooding
+        logging.getLogger().addHandler(handler)
+        log.info("Watchtower logging enabled (%s)", settings.watchtower_db)
+    except ImportError:
+        log.debug("common package not available, Watchtower disabled")
+    except Exception:
+        log.warning("Failed to initialize Watchtower", exc_info=True)
+
+
+_init_watchtower()
 
 # ---------------------------------------------------------------------------
 # App
@@ -80,6 +110,23 @@ app.include_router(outbox.router)
 app.include_router(health.router)
 app.include_router(usage.router)
 app.include_router(proposals.router)
+app.include_router(memory.router)
+app.include_router(journal.router)
+app.include_router(alerts.router)
+app.include_router(backup.router)
+
+
+# -- Startup: bootstrap Cronicle memory index ------------------------------
+
+@app.on_event("startup")
+async def _startup_reindex():
+    """Bootstrap the Cronicle memory index on API start."""
+    try:
+        from .memory import get_memory_index
+        idx = get_memory_index()
+        idx.reindex_all()
+    except Exception:
+        log.exception("Cronicle startup reindex failed")
 
 
 # ---------------------------------------------------------------------------

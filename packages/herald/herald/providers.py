@@ -22,6 +22,7 @@ _CLI_MODELS = {
     "claude": None,  # default model
     "sonnet": "claude-sonnet-4-5-20250929",
     "opus": "claude-opus-4-5-20251101",
+    "haiku": "claude-haiku-4-20250514",
 }
 
 # Cache assembled prompt (rebuilt per spawn, but avoid doing IO every delta)
@@ -44,6 +45,23 @@ def refresh_prompt(config: Config) -> str:
     _cached_prompt = assemble_system_prompt(config)
     _cached_prompt_config_id = id(config)
     return _cached_prompt
+
+
+async def _inject_memory_context(prompt: str) -> str:
+    """Search Cronicle memory and prepend relevant context to the prompt."""
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(
+                f"{_MANOR_API_URL}/api/memory/context",
+                params={"q": prompt[:500]},
+            )
+            if resp.status_code == 200:
+                context = resp.json().get("context", "")
+                if context:
+                    return f"{context}\n\n---\n\n{prompt}"
+    except Exception:
+        log.debug("Cronicle context injection failed", exc_info=True)
+    return prompt
 
 
 async def _report_usage(result: ClaudeResult, session: SessionMeta, started_at: float) -> None:
@@ -80,6 +98,9 @@ async def dispatch_message(
     model = session.model
     system_prompt = _get_system_prompt(config)
     started_at = time.time()
+
+    # Auto-context injection from Cronicle memory
+    prompt = await _inject_memory_context(prompt)
 
     if model in _CLI_MODELS:
         result = await spawn_claude(

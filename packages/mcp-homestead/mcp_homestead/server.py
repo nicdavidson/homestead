@@ -449,6 +449,86 @@ TOOLS: list[dict] = [
             "properties": {},
         },
     },
+    # ── Backup ────────────────────────────────────────────────────────
+    {
+        "name": "export_backup",
+        "description": "Create a backup archive (.hpa) of all Homestead user data (journal, scratchpad, skills, databases, config).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_logs": {
+                    "type": "boolean",
+                    "description": "Include log files in backup (default: false).",
+                },
+            },
+        },
+    },
+    {
+        "name": "list_backups",
+        "description": "List available backup archives.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    # ── Cronicle (Memory) ─────────────────────────────────────────────
+    {
+        "name": "search_memory",
+        "description": "Search across all memory (lore, scratchpad, journal) using full-text search. Use this to find relevant context.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query.",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Optional: filter by 'lore', 'scratchpad', or 'journal'.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results (default 10).",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "write_journal",
+        "description": "Append a reflection or observation to today's journal. Use this freely to record learnings, insights, and session summaries.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The journal entry text to append.",
+                },
+            },
+            "required": ["content"],
+        },
+    },
+    {
+        "name": "read_journal",
+        "description": "Read a journal entry by date.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "Date in YYYY-MM-DD format. Omit for today.",
+                },
+            },
+        },
+    },
+    {
+        "name": "list_journal",
+        "description": "List all journal entries.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
 
 
@@ -555,11 +635,28 @@ def handle_tool_call(name: str, arguments: dict) -> str:
         result = _api("GET", f"/api/lore/{arguments['filename']}")
 
     elif name == "write_lore":
-        result = _api(
-            "PUT",
-            f"/api/lore/{arguments['filename']}",
-            json={"content": arguments["content"]},
-        )
+        filename = arguments["filename"]
+        core_files = {"soul.md", "identity.md", "claude.md", "user.md", "agents.md"}
+        if filename in core_files:
+            # Route core lore through proposal system for HITL review
+            result = _api(
+                "POST",
+                "/api/proposals",
+                json={
+                    "title": f"Lore update: {filename}",
+                    "description": f"AI-initiated update to core lore file {filename}",
+                    "file_path": f"lore/{filename}",
+                    "original_content": "",
+                    "new_content": arguments["content"],
+                },
+            )
+            result = f"Core lore file '{filename}' requires human review. Proposal created."
+        else:
+            result = _api(
+                "PUT",
+                f"/api/lore/{filename}",
+                json={"content": arguments["content"]},
+            )
 
     # ── Scratchpad ─────────────────────────────────────────────────────
     elif name == "list_scratchpad":
@@ -617,6 +714,39 @@ def handle_tool_call(name: str, arguments: dict) -> str:
     # ── Health ─────────────────────────────────────────────────────────
     elif name == "check_health":
         result = _api("GET", "/health/detailed")
+
+    # ── Backup ────────────────────────────────────────────────────────
+    elif name == "export_backup":
+        body = {}
+        if arguments.get("include_logs"):
+            body["include_logs"] = True
+        result = _api("POST", "/api/backup/export", json=body)
+
+    elif name == "list_backups":
+        result = _api("GET", "/api/backup/list")
+
+    # ── Cronicle (Memory) ─────────────────────────────────────────────
+    elif name == "search_memory":
+        params = {"q": arguments["query"]}
+        if arguments.get("source"):
+            params["source"] = arguments["source"]
+        if arguments.get("limit"):
+            params["limit"] = arguments["limit"]
+        result = _api("GET", "/api/memory/search", params=params)
+
+    elif name == "write_journal":
+        result = _api("POST", "/api/journal/append", json={"content": arguments["content"]})
+
+    elif name == "read_journal":
+        date = arguments.get("date", "")
+        if date:
+            result = _api("GET", f"/api/journal/{date}")
+        else:
+            from datetime import date as dt_date
+            result = _api("GET", f"/api/journal/{dt_date.today().isoformat()}")
+
+    elif name == "list_journal":
+        result = _api("GET", "/api/journal")
 
     else:
         raise ValueError(f"Unknown tool: {name}")

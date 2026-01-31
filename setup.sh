@@ -17,12 +17,13 @@ for pkg in packages/herald manor manor/api; do
     fi
 done
 
-# Copy lore templates if they don't exist
-for tmpl in lore/*.md.example; do
-    target="${tmpl%.example}"
+# Copy base lore templates if user overrides don't exist
+for base_file in lore/base/*.md; do
+    [ ! -f "$base_file" ] && continue
+    target="lore/$(basename "$base_file")"
     if [ ! -f "$target" ]; then
-        cp "$tmpl" "$target"
-        echo "Created $target from template"
+        cp "$base_file" "$target"
+        echo "Created $target from base template"
     fi
 done
 

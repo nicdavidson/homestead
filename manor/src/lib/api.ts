@@ -79,9 +79,10 @@ export const api = {
       fetchAPI<void>(`/api/skills/${name}`, { method: "DELETE" }),
   },
   lore: {
-    list: () => fetchAPI<{ name: string; content: string }[]>("/api/lore"),
+    list: () =>
+      fetchAPI<{ name: string; size: number; modified: number; layer: string; has_base: boolean }[]>("/api/lore"),
     get: (name: string) =>
-      fetchAPI<{ name: string; content: string }>(`/api/lore/${name}`),
+      fetchAPI<{ name: string; content: string; size: number; modified: number; layer: string }>(`/api/lore/${name}`),
     save: (name: string, content: string) =>
       fetchAPI<void>(`/api/lore/${name}`, {
         method: "PUT",
@@ -176,6 +177,40 @@ export const api = {
       fetchAPI<Proposal>(`/api/proposals/${id}/apply`, { method: "POST" }),
     delete: (id: string) =>
       fetchAPI<void>(`/api/proposals/${id}`, { method: "DELETE" }),
+    timeline: (params?: { file_path?: string; limit?: number }) => {
+      const qs = new URLSearchParams();
+      if (params) Object.entries(params).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+      return fetchAPI<{ id: string; title: string; description: string; file_paths: string[]; commit_sha: string; applied_at: number; created_at: number; files: { file_path: string; diff: string }[] }[]>(`/api/proposals/history/timeline?${qs}`);
+    },
+    fileHistory: (filePath: string, limit?: number) => {
+      const qs = new URLSearchParams();
+      if (limit) qs.set("limit", String(limit));
+      return fetchAPI<{ file_path: string; commits: { sha: string; date: string; message: string; proposal?: { id: string; title: string; description: string } | null }[] }>(`/api/proposals/history/file/${filePath}?${qs}`);
+    },
+  },
+  memory: {
+    search: (params: { q: string; source?: string; limit?: number }) => {
+      const qs = new URLSearchParams();
+      Object.entries(params).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
+      return fetchAPI<{ id: string; source: string; path: string; title: string; snippet: string; rank: number; updated_at: number }[]>(`/api/memory/search?${qs}`);
+    },
+    context: (q: string) =>
+      fetchAPI<{ context: string }>(`/api/memory/context?q=${encodeURIComponent(q)}`),
+    reindex: () =>
+      fetchAPI<{ status: string; scanned: number; added: number; updated: number; removed: number }>("/api/memory/reindex", { method: "POST" }),
+    stats: () =>
+      fetchAPI<{ total_documents: number; by_source: Record<string, number>; last_reindex_at: number | null }>("/api/memory/stats"),
+  },
+  journal: {
+    list: () =>
+      fetchAPI<{ date: string; size: number; modified: number }[]>("/api/journal"),
+    get: (date: string) =>
+      fetchAPI<{ date: string; content: string; size: number; modified: number }>(`/api/journal/${date}`),
+    save: (date: string, content: string) =>
+      fetchAPI<{ date: string; content: string }>(`/api/journal/${date}`, {
+        method: "PUT",
+        body: JSON.stringify({ content }),
+      }),
   },
   usage: {
     list: (params?: {
@@ -212,5 +247,31 @@ export const api = {
       if (params) Object.entries(params).forEach(([k, v]) => v !== undefined && qs.set(k, String(v)));
       return fetchAPI<UsageBySession[]>(`/api/usage/by-session?${qs}`);
     },
+  },
+  alerts: {
+    rules: () =>
+      fetchAPI<{ id: string; name: string; description: string; rule_type: string; config: Record<string, unknown>; enabled: boolean; cooldown_s: number; created_at: number }[]>("/api/alerts/rules"),
+    toggle: (ruleId: string) =>
+      fetchAPI<{ id: string; enabled: boolean }>(`/api/alerts/rules/${ruleId}/toggle`, { method: "PUT" }),
+    history: (limit?: number) => {
+      const qs = limit ? `?limit=${limit}` : "";
+      return fetchAPI<{ id: number; rule_id: string; fired_at: number; message: string; resolved: boolean; resolved_at: number | null }[]>(`/api/alerts/history${qs}`);
+    },
+    check: () =>
+      fetchAPI<{ checked: boolean; alerts_fired: number; messages: string[] }>("/api/alerts/check", { method: "POST" }),
+  },
+  backup: {
+    export: (includeLogs: boolean = false) =>
+      fetchAPI<{ archive_path: string; size_bytes: number; checksum: string; manifest: Record<string, unknown> }>("/api/backup/export", {
+        method: "POST",
+        body: JSON.stringify({ include_logs: includeLogs }),
+      }),
+    import: (archivePath: string, mergeStrategy: string = "skip_existing") =>
+      fetchAPI<{ imported: Record<string, number>; skipped: string[]; errors: string[] }>("/api/backup/import", {
+        method: "POST",
+        body: JSON.stringify({ archive_path: archivePath, merge_strategy: mergeStrategy }),
+      }),
+    list: () =>
+      fetchAPI<{ filename: string; path: string; size_bytes: number; created_at: number; manifest: Record<string, unknown> | null }[]>("/api/backup/list"),
   },
 };

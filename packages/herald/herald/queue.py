@@ -48,6 +48,10 @@ class MessageQueue:
     def is_active(self, chat_id: int) -> bool:
         return chat_id in self._active
 
+    def depth(self, chat_id: int) -> int:
+        """Return the number of messages queued for a chat."""
+        return len(self._queues.get(chat_id, []))
+
     def clear(self, chat_id: int) -> None:
         removed = len(self._queues.get(chat_id, []))
         self._queues.pop(chat_id, None)

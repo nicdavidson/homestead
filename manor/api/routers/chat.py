@@ -177,6 +177,16 @@ async def _spawn_and_stream(
     result_cost_usd: float | None = None
     result_num_turns: int = 0
 
+    # Auto-context injection from Cronicle memory
+    try:
+        from ..memory import get_memory_index
+        idx = get_memory_index()
+        context = idx.get_context_for_query(prompt[:500])
+        if context:
+            prompt = f"{context}\n\n---\n\n{prompt}"
+    except Exception:
+        log.debug("Cronicle context injection failed", exc_info=True)
+
     # Assemble system prompt
     try:
         system_prompt = assemble_system_prompt()

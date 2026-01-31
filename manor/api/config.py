@@ -77,6 +77,14 @@ class Settings:
         return Path(self.homestead_data_dir).expanduser() / "workspaces"
 
     @property
+    def memory_db(self) -> Path:
+        return Path(self.homestead_data_dir).expanduser() / "memory.db"
+
+    @property
+    def journal_dir(self) -> Path:
+        return Path(self.homestead_data_dir).expanduser() / "journal"
+
+    @property
     def lore_path(self) -> Path:
         return Path(self.lore_dir).expanduser()
 

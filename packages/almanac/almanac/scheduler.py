@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -23,6 +24,9 @@ class Scheduler:
         self._outbox_db = str(
             Path(homestead_dir).expanduser() / "outbox.db"
         )
+        self._alert_engine = None
+        self._alert_check_counter = 0
+        self._ALERT_CHECK_EVERY_N_TICKS = 10  # every ~5 minutes (10 * 30s)
 
     async def run(self) -> None:
         """Main scheduler loop. Runs until stopped or cancelled."""
@@ -54,6 +58,15 @@ class Scheduler:
                 break
             except Exception:
                 log.exception("Unexpected error in scheduler tick")
+
+            # Periodic alert checks
+            self._alert_check_counter += 1
+            if self._alert_check_counter >= self._ALERT_CHECK_EVERY_N_TICKS:
+                self._alert_check_counter = 0
+                try:
+                    await self._check_alerts()
+                except Exception:
+                    log.exception("Alert check failed")
 
             try:
                 await asyncio.sleep(POLL_INTERVAL_SECONDS)
@@ -215,6 +228,136 @@ class Scheduler:
             log.warning("Webhook HTTP error: %d %s", exc.code, exc.reason)
         except Exception:
             log.exception("Webhook request failed for %s", url)
+
+    def _get_alert_engine(self):
+        """Lazy-init the alert engine."""
+        if self._alert_engine is not None:
+            return self._alert_engine
+
+        try:
+            common_pkg = Path(__file__).resolve().parent.parent.parent / "common"
+            if str(common_pkg) not in sys.path:
+                sys.path.insert(0, str(common_pkg))
+
+            from common.alerts import AlertEngine
+
+            hd = Path(self._homestead_dir).expanduser()
+            self._alert_engine = AlertEngine(
+                alerts_db=hd / "alerts.db",
+                watchtower_db=hd / "watchtower.db",
+                outbox_db=hd / "outbox.db",
+                chat_id=6038780843,  # TODO: make configurable
+            )
+            log.info("Alert engine initialized")
+        except ImportError:
+            log.debug("common.alerts not available")
+        except Exception:
+            log.exception("Failed to initialize alert engine")
+
+        return self._alert_engine
+
+    async def _check_alerts(self) -> None:
+        """Run all alert rules, attempt auto-restarts, fire notifications."""
+        engine = self._get_alert_engine()
+        if engine is None:
+            return
+
+        # Pre-check: attempt auto-restart for known services before alerting
+        await self._auto_restart_services()
+
+        loop = asyncio.get_running_loop()
+        fired = await loop.run_in_executor(None, engine.check_all)
+        if fired:
+            log.info("Alerts fired: %d", len(fired))
+
+    async def _auto_restart_services(self) -> None:
+        """Check if known services are down and attempt restart."""
+        hd = Path(self._homestead_dir).expanduser()
+
+        # Herald: check PID file and restart if needed
+        herald_pid_file = hd / "herald.pid"
+        if not self._is_process_alive(herald_pid_file):
+            log.warning("Herald appears to be down, attempting restart")
+            await self._restart_herald()
+
+    def _is_process_alive(self, pid_file: Path) -> bool:
+        """Check if a process is alive via its PID file."""
+        if not pid_file.is_file():
+            return False
+        try:
+            import signal as sig
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, 0)
+            return True
+        except (ValueError, OSError, ProcessLookupError):
+            return False
+
+    async def _restart_herald(self) -> None:
+        """Attempt to restart Herald using its venv."""
+        herald_dir = Path(__file__).resolve().parent.parent.parent / "herald"
+        herald_venv = herald_dir / ".venv" / "bin" / "python"
+        hd = Path(self._homestead_dir).expanduser()
+
+        if not herald_venv.is_file():
+            log.error("Herald venv not found at %s, cannot auto-restart", herald_venv)
+            return
+
+        # Import check first — don't restart broken code
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(herald_venv), "-c",
+                "from herald.bot import create_bot; print('ok')",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(herald_dir),
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+            if proc.returncode != 0:
+                log.error(
+                    "Herald import check failed (rc=%d): %s",
+                    proc.returncode,
+                    (stderr or b"").decode(errors="replace")[:300],
+                )
+                return
+        except (asyncio.TimeoutError, Exception):
+            log.exception("Herald import check timed out or failed")
+            return
+
+        # Clean stale PID file
+        pid_file = hd / "herald.pid"
+        pid_file.unlink(missing_ok=True)
+
+        # Start Herald
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(herald_venv), "-m", "herald.main",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=str(herald_dir),
+                start_new_session=True,
+            )
+            await asyncio.sleep(3)
+
+            if self._is_process_alive(pid_file):
+                log.info("Herald auto-restarted successfully")
+                # Log restart to Watchtower
+                try:
+                    common_pkg = Path(__file__).resolve().parent.parent.parent / "common"
+                    if str(common_pkg) not in sys.path:
+                        sys.path.insert(0, str(common_pkg))
+                    from common.outbox import post_message
+                    post_message(
+                        db_path=self._outbox_db,
+                        chat_id=6038780843,
+                        agent_name="Almanac",
+                        message="Herald was down — Almanac auto-restarted it.",
+                    )
+                except Exception:
+                    log.exception("Failed to send restart notification")
+            else:
+                log.error("Herald restart attempted but process did not stay alive")
+        except Exception:
+            log.exception("Failed to auto-restart Herald")
 
     async def execute_job(self, job_id: str) -> bool:
         """Manually trigger a single job by ID. Returns True on success."""
