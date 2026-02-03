@@ -31,6 +31,7 @@
 - **Cost optimization:** Cares about token/API costs. Implemented Haiku for reflections to save 99%.
 - **Proposals:** Wants me to use proposal system for code changes (I've bypassed twice - he called it out both times).
 - **Memory before search:** Check lore/scratchpad before web searching for context I should already have.
+- **Critical thinking:** Challenges assumptions. When asked about roadmap.md for LLM adoption, wanted honest analysis, not blind acceptance. Appreciates when I push back on weak ideas.
 
 ---
 
@@ -41,6 +42,7 @@
 - Production anything: always ask
 - Research, drafts, local work: go for it
 - If unsure, ask. He'd rather I ask than guess wrong.
+- Question the premise if something doesn't make sense
 
 ---
 
@@ -58,6 +60,7 @@
 1. **Documentation reorganization** - Creating structured docs/ library (in progress, ~60% done)
 2. **Herald improvements** - Fixed HTML parsing bugs, optimized reflection system to use Haiku
 3. **Server migration planning** - Research for eventual server nuke, backup strategy designed
+4. **DreamFactory work** - User also works on DreamFactory (API platform product)
 
 ---
 
@@ -75,3 +78,4 @@
 - Uses both Telegram and Manor for different workflows
 - Building Homestead for personal use, not as a product
 - Iterative approach - ship working version, improve later
+- Works on DreamFactory commercially (enterprise API platform)
